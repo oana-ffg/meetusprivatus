@@ -1,0 +1,7 @@
+<Project>
+  <Target Name="KeepWindowsX64NativeAssets" BeforeTargets="AssignTargetPaths">
+    <ItemGroup>
+      <None Remove="$(NuGetPackageRoot)/whisper.net.runtime/$(WhisperVersion)/build/win-arm64/**/*;$(NuGetPackageRoot)/whisper.net.runtime/$(WhisperVersion)/build/win-x86/**/*;$(NuGetPackageRoot)/whisper.net.runtime.noavx/$(WhisperVersion)/build/linux-x64/**/*;$(NuGetPackageRoot)/whisper.net.runtime.noavx/$(WhisperVersion)/build/win-x86/**/*" />
+    </ItemGroup>
+  </Target>
+</Project>

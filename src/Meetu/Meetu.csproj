@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AssemblyName>meetus</AssemblyName>
+    <RootNamespace>Meetu</RootNamespace>
+    <Version>0.1.0-preview.1</Version>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="NAudio.Wasapi" Version="3.1.0" />
+    <PackageReference Include="Whisper.net" Version="$(WhisperVersion)" />
+    <PackageReference Include="Whisper.net.Runtime" Version="$(WhisperVersion)" />
+    <PackageReference Include="Whisper.net.Runtime.NoAvx" Version="$(WhisperVersion)" />
+  </ItemGroup>
+</Project>

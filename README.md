@@ -1,0 +1,101 @@
+# Meetus Privatus
+
+A small Windows 11 meeting transcriber. It captures the mic and everything played through the selected output device into separate text files using Whisper base.en on the CPU. Works independently of Zoom/Teams processes: no app selection needed. No GUI, live transcript display, accounts, server, or runtime network calls.
+
+**Prototype:** public-audio recognition and output-device pipeline tests pass. Real Zoom/Teams calls, accent accuracy, and smooth operation on a low-powered laptop still need validation. Automatic meeting detection and individual-speaker diarization are deferred.
+
+## Download and run
+
+Download the Windows x64 ZIP from this repository's Releases page, extract it, and double-click `Start.cmd` inside the extracted folder. The archive includes the .NET runtime and verified Whisper/Silero models; no SDK or model download is needed. Windows 11 x64 and the Microsoft Visual C++ x64 redistributable are required. Preview releases retain the validation limits stated above.
+
+## Build and setup
+
+Build prerequisites: Windows 11 x64 and the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). Runtime prerequisite: the [Microsoft Visual C++ x64 redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist). Self-contained publication includes .NET; the destination machine needs neither the SDK nor a GPU.
+
+From the repository in PowerShell:
+
+```powershell
+.\scripts\build.ps1 -Publish
+.\scripts\download-models.ps1 -Destination .artifacts\publish\models
+
+```
+
+After setup, double-click `Start.cmd`. No configuration is required for normal use.
+
+The model script is a **manual setup download**: revision-pinned Whisper base.en Q5_1 (~60 MB) plus Silero VAD (<1 MB), with size/SHA-256 verification. It reuses valid files and refuses to overwrite a corrupt existing file. The app does not invoke it. Build/package restore needs networking unless dependencies are cached.
+
+For offline installation, copy the complete published directory, supply the two verified `.bin` files under its `models` folder, and install the redistributable separately. Alternatively configure explicit local paths:
+
+```powershell
+& $meetus config --model "$PWD\models\ggml-base.en-q5_1.bin" --vad "$PWD\models\ggml-silero-v5.1.2.bin"
+```
+
+`download-models.ps1 -Model base.en` fetches unquantized English base for accuracy comparison; configure its `ggml-base.en.bin` path explicitly. The recognizer stays Whisper base.en. Preserve third-party notices when redistributing models/binaries.
+
+## Use it
+
+**Double-click `Start.cmd`. Press Ctrl+C in its window to stop early. Otherwise it stops capturing after 60 minutes. No commands or app selection are needed.**
+
+The launcher opens a small status console, without live transcript text. Ctrl+C and auto-stop end capture, then finish queued transcription and delete each clip after saving its text. Leave the window open while it finishes; it closes when done. Closing the window forcibly can interrupt cleanup. The pending-audio retention limit still applies during finishing.
+
+The first launch automatically saves defaults. Transcripts go to `%LOCALAPPDATA%\MeetusPrivatus\transcripts`. To change the recording duration or destination, open `%LOCALAPPDATA%\MeetusPrivatus\config.json` and edit `MaxSessionMinutes` (default 60; 1–1440) or `OutputDirectory`. JSON paths use doubled backslashes. Changes affect the next session. No configuration is needed for normal use.
+
+For development or optional advanced control, the CLI remains available:
+
+```powershell
+$meetus = (Resolve-Path .artifacts\publish\meetus.exe).Path
+& $meetus start
+& $meetus status
+& $meetus stop
+```
+
+`start` launches a hidden worker and returns once capture starts. `stop` ends capture; pending recognition finishes in the background. Use `status` until it reports `Complete` or `Failed` before starting another session. These commands are optional; `Start.cmd` uses foreground `run` so Ctrl+C reaches the recording process directly, without a batch-file confirmation prompt.
+
+**Playback capture includes every app on the selected output device**, including notification sounds, music, and browser audio. Speech from those sources can appear in `remote.txt`. Closing Zoom/Teams does not stop capture; use `stop` after the meeting.
+
+The default mic is the Windows **communications input**; playback uses the Windows **default output** at session start. If the meeting uses different devices, run `devices` to list input/output IDs, then set `config --mic` and/or `config --playback` to the matching IDs. `config --mic default` and `config --playback default` restore defaults for future sessions. Headphones are the baseline. The app keeps the chosen devices throughout a session; it does not follow default-device changes or record other outputs.
+
+**Mic capture continues while muted in Zoom/Teams**, including spoken notes to self. Use `stop` to stop the assistant; app mute only controls what meeting participants hear.
+
+## Files and limits
+
+Each output session contains timestamped UTF-8 `local.txt` and `remote.txt`, canonical transcript records under `segments`, and lifecycle metadata in `session.json`. Remote participants are grouped together; `remote.txt` is honestly labelled as all playback on the selected output, which may include other apps. No summaries or invented identities. Text stays until you delete the session folder; `segments` contains private spoken content too.
+
+Settings/status default to `%LOCALAPPDATA%\MeetusPrivatus`; `config` displays them. Set another destination with `config --output-dir`; it affects future sessions. Choose local storage if you do not want another program synchronizing the text.
+
+State, output, and model paths must use local drives without links/junctions or cloud placeholders. UNC and mapped network drives are rejected before opening them. Ordinary local backup/synchronization software is still outside the application's control.
+
+Defaults: one CPU inference thread, BelowNormal priority, and a 20-second clip maximum. `config --threads 2` raises the ceiling to two; `config --clip-seconds` accepts 5–30. More threads may increase contention; shorter clips can increase repeated recognition overhead. No automatic escalation occurs. A baseline CPU runtime is included for processors without the optimized runtime's instruction support.
+
+Recording auto-stops after `MaxSessionMinutes` (60 by default). This is separate from the shared pending-audio limit: both streams share an hour of pending session time and about 220 MiB of PCM. Processed clips are deleted promptly. At age/storage limits capture stops, completed text survives, and gaps are marked. Only expiring clips are discarded; newer pending speech can still finish within its own deadline. Finishing after Ctrl+C, auto-stop, or normal stop remains bounded by the same retention policy.
+
+Whisper can mishear accents, names, numbers, silence, and words split at clip boundaries. Timestamps are approximate: when an endpoint supplies no usable native clock, capture uses a common monotonic arrival estimate and sample progression. This is a memory aid. Development-machine performance does not establish performance during screen sharing on a low-powered laptop.
+
+## Interruption and privacy
+
+After a crash, use `cleanup` or start a new session to remove abandoned owned audio. Cleanup refuses an active worker and preserves unrelated files and finalized text. Crashes/suspension can leave clips until cleanup executes.
+
+Use `repair --session-dir` with an affected session directory to rebuild interrupted text exports from canonical records, without audio replay. Unrelated folders are rejected.
+
+The running app has no outbound workflow, telemetry, cloud service, automatic download, or network listener. Controllers use a current-user-only named pipe. Newly created private directories restrict access to the current Windows user. OS memory/paging/dumps/backups, a compromised OS, and user-configured synchronization remain outside the app's control. Ordinary deletion is not forensic erasure. Zoom/Teams use their own network connections.
+
+Failures are inspectable through `status` and nonzero exit codes; there are no notification pop-ups. Audio-device failures stop or fail a session instead of silently rerouting capture.
+
+## Development checks
+
+```powershell
+.\scripts\build.ps1
+.\scripts\test-native.ps1
+```
+
+The normal suite skips native checks. The native script downloads a hash-pinned **public JFK speech fixture** if absent, tests speech/silence and output-device playback-to-text, publishes the app, then validates baseline CPU in a fresh process and real Windows Ctrl+C during startup in an isolated hidden console. The console check deliberately selects a nonexistent mic and checks graceful completion, owned-audio cleanup, and automatic settings. It can also be run independently with `scripts/test-console.ps1` after publication. The playback check briefly plays quiet public speech through the current output device and never opens the mic. Close meetings/media first: it refuses unrelated active playback before/during capture and before writing/transcribing captured data. This polling guard cannot guarantee detection of very brief sounds. Cached fixtures/models permit recognition tests without new downloads.
+
+Use `--state-dir` to isolate development CLI state. Keep generated models/audio/transcripts/test outputs/publication ignored. See [REQUIREMENTS.md](REQUIREMENTS.md), [SPEC.md](SPEC.md), and [AGENTS.md](AGENTS.md) for scope and outstanding acceptance checks.
+
+## Release packaging
+
+Maintainers can run `scripts/package-release.ps1` from a clean committed checkout with local verified models. It builds/tests into a fresh directory, includes models/notices and a source-commit manifest, checks console cancellation, and writes a ZIP plus SHA-256 file under ignored `.artifacts/releases`. Existing release assets are never overwritten.
+
+## License
+
+[MIT](LICENSE), attributed to Meetus Privatus contributors. Dependencies/models retain their own terms; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) and `licenses/`.

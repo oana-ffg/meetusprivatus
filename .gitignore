@@ -1,0 +1,16 @@
+.artifacts/
+**/bin/
+**/obj/
+models/
+recordings/
+transcripts/
+*.user
+*.suo
+TestResults/
+*.pcm
+**/local.txt
+**/remote.txt
+**/session.json
+**/segments/
+**/worker.lock
+**/meetus-owned-audio-v1
