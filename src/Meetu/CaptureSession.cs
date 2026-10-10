@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Threading.Channels;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
@@ -64,7 +65,7 @@ public sealed class CaptureSession
             using var playback = AudioDevices.OpenPlayback(enumerator, config.PlaybackId);
             local = AudioDevices.CreateMicrophoneRecorder(microphone);
             remote = AudioDevices.CreatePlaybackRecorder(playback);
-            var directory = Path.Combine(config.OutputDirectory!, DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + sessionId);
+            var directory = Path.Combine(config.OutputDirectory!, DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + sessionId);
             transcripts = new TranscriptStore(directory);
             startedUtc = DateTimeOffset.UtcNow;
             JsonFiles.Write(Path.Combine(directory, "session.json"), new
@@ -180,8 +181,9 @@ public sealed class CaptureSession
         }
         catch
         {
+            // Overload policy: stop capture but let already queued clips finish within their own deadlines.
+            // Unfinished partial clips are deleted with the workspace; the session is marked incomplete.
             fault.TrySetResult("Audio storage or segmentation failed. Capture stopped; transcript may be incomplete.");
-            throw;
         }
         finally { clips.TryComplete(); }
     }
@@ -232,7 +234,8 @@ public sealed class CaptureSession
             using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
             while (await timer.WaitForNextTickAsync(cancellationToken))
             {
-                if (microphone.State != DeviceState.Active || playback.State != DeviceState.Active)
+                // After a requested stop, device changes cannot lose speech and must not mark the session failed.
+                if (!stop.Task.IsCompleted && (microphone.State != DeviceState.Active || playback.State != DeviceState.Active))
                     fault.TrySetResult("Selected audio device is unavailable. Capture stopped without switching devices.");
                 if (budget.Snapshot(Stopwatch.GetTimestamp()).AgeSeconds >= (PendingBudget.MaximumAge - PendingBudget.ExpiryMargin).TotalSeconds)
                 {

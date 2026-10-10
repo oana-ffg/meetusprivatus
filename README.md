@@ -17,20 +17,20 @@ From the repository in PowerShell:
 ```powershell
 .\scripts\build.ps1 -Publish
 .\scripts\download-models.ps1 -Destination .artifacts\publish\models
-
 ```
 
 After setup, double-click `Start.cmd`. No configuration is required for normal use.
 
 The model script is a **manual setup download**: revision-pinned Whisper base.en Q5_1 (~60 MB) plus Silero VAD (<1 MB), with size/SHA-256 verification. It reuses valid files and refuses to overwrite a corrupt existing file. The app does not invoke it. Build/package restore needs networking unless dependencies are cached.
 
-For offline installation, copy the complete published directory, supply the two verified `.bin` files under its `models` folder, and install the redistributable separately. Alternatively configure explicit local paths:
+For offline installation, copy the complete published directory, supply the two verified `.bin` files under its `models` folder, and install the redistributable separately. Unless configured otherwise, the app always looks in the `models` folder beside `meetus.exe`, so moving or upgrading the published directory keeps working. Alternatively configure explicit local paths:
 
 ```powershell
+$meetus = (Resolve-Path .artifacts\publish\meetus.exe).Path
 & $meetus config --model "$PWD\models\ggml-base.en-q5_1.bin" --vad "$PWD\models\ggml-silero-v5.1.2.bin"
 ```
 
-`download-models.ps1 -Model base.en` fetches unquantized English base for accuracy comparison; configure its `ggml-base.en.bin` path explicitly. The recognizer stays Whisper base.en. Preserve third-party notices when redistributing models/binaries.
+`config --model default --vad default` returns to the models beside `meetus.exe`. `download-models.ps1 -Model base.en` fetches unquantized English base for accuracy comparison; configure its `ggml-base.en.bin` path explicitly. The recognizer stays Whisper base.en. Preserve third-party notices when redistributing models/binaries.
 
 ## Use it
 
@@ -40,10 +40,9 @@ The launcher opens a small status console, without live transcript text. Ctrl+C 
 
 The first launch automatically saves defaults. Transcripts go to `%LOCALAPPDATA%\MeetusPrivatus\transcripts`. To change the recording duration or destination, open `%LOCALAPPDATA%\MeetusPrivatus\config.json` and edit `MaxSessionMinutes` (default 60; 1–1440) or `OutputDirectory`. JSON paths use doubled backslashes. Changes affect the next session. No configuration is needed for normal use.
 
-For development or optional advanced control, the CLI remains available:
+For development or optional advanced control, the CLI remains available (`$meetus` is the published `meetus.exe` path, as above):
 
 ```powershell
-$meetus = (Resolve-Path .artifacts\publish\meetus.exe).Path
 & $meetus start
 & $meetus status
 & $meetus stop
@@ -88,7 +87,7 @@ Failures are inspectable through `status` and nonzero exit codes; there are no n
 .\scripts\test-native.ps1
 ```
 
-The normal suite skips native checks. The native script downloads a hash-pinned **public JFK speech fixture** if absent, tests speech/silence and output-device playback-to-text, publishes the app, then validates baseline CPU in a fresh process and real Windows Ctrl+C during startup in an isolated hidden console. The console check deliberately selects a nonexistent mic and checks graceful completion, owned-audio cleanup, and automatic settings. It can also be run independently with `scripts/test-console.ps1` after publication. The playback check briefly plays quiet public speech through the current output device and never opens the mic. Close meetings/media first: it refuses unrelated active playback before/during capture and before writing/transcribing captured data. This polling guard cannot guarantee detection of very brief sounds. Cached fixtures/models permit recognition tests without new downloads.
+The normal suite skips native checks. `test-native.ps1` and `package-release.ps1` read models from the repository's `models` folder by default; pass `-Models .artifacts\publish\models` to reuse the setup download above. The native script downloads a hash-pinned **public JFK speech fixture** if absent, tests speech/silence and output-device playback-to-text, publishes the app, then validates baseline CPU in a fresh process and real Windows Ctrl+C during startup in an isolated hidden console. The console check deliberately selects a nonexistent mic and checks graceful completion, owned-audio cleanup, and automatic settings. It can also be run independently with `scripts/test-console.ps1` after publication. The playback check briefly plays quiet public speech through the current output device and never opens the mic. Close meetings/media first: it refuses unrelated active playback before/during capture and before writing/transcribing captured data. This polling guard cannot guarantee detection of very brief sounds. Cached fixtures/models permit recognition tests without new downloads.
 
 Use `--state-dir` to isolate development CLI state. Keep generated models/audio/transcripts/test outputs/publication ignored. See [REQUIREMENTS.md](REQUIREMENTS.md), [SPEC.md](SPEC.md), and [AGENTS.md](AGENTS.md) for scope and outstanding acceptance checks.
 

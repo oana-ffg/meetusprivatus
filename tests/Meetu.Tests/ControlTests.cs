@@ -43,6 +43,26 @@ public sealed class ControlTests
     }
 
     [Fact]
+    public async Task FirstConfigurationSavesDefaultOutputWithoutPinningTheInstallLocation()
+    {
+        using var directory = new TestDirectory();
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        var model = Path.Combine(directory.Path, "invalid-model-fixture.bin"); File.WriteAllBytes(model, [0]);
+        // Device setup can precede the first recording; it must not require choosing an output directory.
+        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--model", model, "--vad", model, "--mic", "configured-input"]));
+        var saved = paths.LoadConfig();
+        Assert.Equal(Path.Combine(paths.Root, "transcripts"), saved.OutputDirectory);
+        Assert.Equal("configured-input", saved.MicrophoneId);
+        // Unset model paths stay unset in saved settings, so a moved or upgraded app finds its own models.
+        var defaults = new AppConfig { OutputDirectory = saved.OutputDirectory };
+        Assert.Equal(Path.Combine(AppContext.BaseDirectory, "models", "ggml-base.en-q5_1.bin"), defaults.ResolvedModelPath);
+        Assert.Equal(Path.Combine(AppContext.BaseDirectory, "models", "ggml-silero-v5.1.2.bin"), defaults.ResolvedVadPath);
+        var json = System.Text.Json.JsonSerializer.Serialize(defaults, JsonFiles.Options);
+        Assert.DoesNotContain("ggml", json);
+        Assert.Null(System.Text.Json.JsonSerializer.Deserialize<AppConfig>(json, JsonFiles.Options)!.ModelPath);
+    }
+
+    [Fact]
     public async Task RemovedProcessOptionsFailBeforeStartingCapture()
     {
         using var directory = new TestDirectory();

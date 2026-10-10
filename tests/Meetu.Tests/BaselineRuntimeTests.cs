@@ -23,7 +23,7 @@ public sealed class BaselineRuntimeTests
         var config = NativeRecognitionTests.Configuration(directory.Path);
         // The native loader is process-global. Initialize baseline explicitly in this separate test run.
         RuntimeOptions.RuntimeLibraryOrder = [RuntimeLibrary.CpuNoAvx];
-        using var initialize = WhisperFactory.FromPath(config.ModelPath, new WhisperFactoryOptions { UseGpu = false });
+        using var initialize = WhisperFactory.FromPath(config.ResolvedModelPath, new WhisperFactoryOptions { UseGpu = false });
         Assert.Equal(RuntimeLibrary.CpuNoAvx, RuntimeOptions.LoadedLibrary);
         await using var recognizer = new Recognizer(config);
         using var wave = new NAudio.Wave.WaveFileReader(Environment.GetEnvironmentVariable("MEETUS_FIXTURE")!);
