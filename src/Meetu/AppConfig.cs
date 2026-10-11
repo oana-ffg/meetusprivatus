@@ -19,8 +19,26 @@ public sealed record AppConfig
     public int ClipSeconds { get; init; } = 20;
     public int MaxSessionMinutes { get; init; } = 60;
 
-    [JsonIgnore] public string ResolvedModelPath => ModelPath ?? Path.Combine(AppContext.BaseDirectory, "models", "ggml-base.en-q5_1.bin");
-    [JsonIgnore] public string ResolvedVadPath => VadPath ?? Path.Combine(AppContext.BaseDirectory, "models", "ggml-silero-v5.1.2.bin");
+    private const string DefaultModelFile = "ggml-base.en-q5_1.bin";
+    private const string DefaultVadFile = "ggml-silero-v5.1.2.bin";
+
+    [JsonIgnore] public string ResolvedModelPath => ModelPath ?? Path.Combine(AppContext.BaseDirectory, "models", DefaultModelFile);
+    [JsonIgnore] public string ResolvedVadPath => VadPath ?? Path.Combine(AppContext.BaseDirectory, "models", DefaultVadFile);
+
+    // Earlier versions saved the install folder's default models. When that copy is gone, follow the
+    // app's own models folder instead of requiring a manual reset. Other model choices are kept as-is.
+    public AppConfig WithMissingDefaultModelsUnpinned() => this with
+    {
+        ModelPath = Unpinned(ModelPath, DefaultModelFile),
+        VadPath = Unpinned(VadPath, DefaultVadFile)
+    };
+
+    private static string? Unpinned(string? path, string defaultFile)
+    {
+        if (path is null || !Path.GetFileName(path).Equals(defaultFile, StringComparison.OrdinalIgnoreCase)) return path;
+        LocalPath.Require(path);
+        return File.Exists(path) ? path : null;
+    }
 
     public void Validate()
     {

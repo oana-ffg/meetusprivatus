@@ -19,7 +19,7 @@ public static class Program
             {
                 case "config":
                     RequireOptions(options, "state-dir", "output-dir", "model", "vad", "mic", "playback", "threads", "clip-seconds", "max-minutes");
-                    var config = paths.LoadConfig();
+                    var config = paths.LoadConfig().WithMissingDefaultModelsUnpinned();
                     config = WithDefaultOutput(paths, config with
                     {
                         OutputDirectory = AbsoluteOption(options, "output-dir", config.OutputDirectory),
@@ -74,7 +74,8 @@ public static class Program
                     LocalPath.Require(sessionDirectory);
                     if (!File.Exists(Path.Combine(sessionDirectory, "session.json")) || !Directory.Exists(Path.Combine(sessionDirectory, "segments")))
                         throw new ArgumentException("This is not a recognizable meeting transcript directory.");
-                    new TranscriptStore(sessionDirectory).Render();
+                    // A live worker may still commit to this session; never overwrite its text views.
+                    using (AcquireWorkerLock(paths)) new TranscriptStore(sessionDirectory).Render();
                     Console.WriteLine("Text files rebuilt from committed segment records."); return 0;
                 default: throw new ArgumentException("Unknown command. Use meetus help.");
             }
@@ -91,7 +92,7 @@ public static class Program
     private static void PrepareConfig(StatePaths paths)
     {
         var saved = paths.LoadConfig();
-        var config = WithDefaultOutput(paths, saved);
+        var config = WithDefaultOutput(paths, saved.WithMissingDefaultModelsUnpinned());
         config.Validate();
         if (config != saved) JsonFiles.Write(paths.ConfigFile, config);
     }
@@ -100,16 +101,24 @@ public static class Program
     private static AppConfig WithDefaultOutput(StatePaths paths, AppConfig config) =>
         config.OutputDirectory is null ? config with { OutputDirectory = Path.Combine(paths.Root, "transcripts") } : config;
 
+    // The worker holds this exclusive handle for its lifetime; cleanup and repair take it briefly.
+    private static FileStream AcquireWorkerLock(StatePaths paths)
+    {
+        try { return new FileStream(Path.Combine(paths.Root, "worker.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+        catch (IOException exception) when (exception.HResult == unchecked((int)0x80070020)) // ERROR_SHARING_VIOLATION
+        { throw new InvalidOperationException("A recording is still running or finishing. Wait for it to complete, then retry."); }
+    }
+
     private static void Cleanup(StatePaths paths)
     {
-        using var workerLock = new FileStream(Path.Combine(paths.Root, "worker.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var workerLock = AcquireWorkerLock(paths);
         ClipWorkspace.CleanupAbandoned(paths.AudioRoot);
     }
 
     private static async Task<int> RunWorkerAsync(StatePaths paths, bool interactive = false)
     {
         // The handle is held for the worker lifetime, including cleanup and model disposal.
-        using var workerLock = new FileStream(Path.Combine(paths.Root, "worker.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var workerLock = AcquireWorkerLock(paths);
         using var process = Process.GetCurrentProcess();
         process.PriorityClass = ProcessPriorityClass.BelowNormal;
         void ShowStatus(SessionStatus status)

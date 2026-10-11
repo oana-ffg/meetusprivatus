@@ -23,7 +23,7 @@ After setup, double-click `Start.cmd`. No configuration is required for normal u
 
 The model script is a **manual setup download**: revision-pinned Whisper base.en Q5_1 (~60 MB) plus Silero VAD (<1 MB), with size/SHA-256 verification. It reuses valid files and refuses to overwrite a corrupt existing file. The app does not invoke it. Build/package restore needs networking unless dependencies are cached.
 
-For offline installation, copy the complete published directory, supply the two verified `.bin` files under its `models` folder, and install the redistributable separately. Unless configured otherwise, the app always looks in the `models` folder beside `meetus.exe`, so moving or upgrading the published directory keeps working. Alternatively configure explicit local paths:
+For offline installation, copy the complete published directory, supply the two verified `.bin` files under its `models` folder, and install the redistributable separately. Unless configured otherwise, the app always looks in the `models` folder beside `meetus.exe`, so moving or upgrading the published directory keeps working. Settings saved by earlier previews that point at a removed folder's default models also switch to the models beside `meetus.exe` automatically. Alternatively configure explicit local paths:
 
 ```powershell
 $meetus = (Resolve-Path .artifacts\publish\meetus.exe).Path
@@ -74,7 +74,7 @@ Whisper can mishear accents, names, numbers, silence, and words split at clip bo
 
 After a crash, use `cleanup` or start a new session to remove abandoned owned audio. Cleanup refuses an active worker and preserves unrelated files and finalized text. Crashes/suspension can leave clips until cleanup executes.
 
-Use `repair --session-dir` with an affected session directory to rebuild interrupted text exports from canonical records, without audio replay. Unrelated folders are rejected.
+Use `repair --session-dir` with an affected session directory to rebuild interrupted text exports from canonical records, without audio replay. Unrelated folders are rejected, and repair refuses while a recording is running or finishing.
 
 The running app has no outbound workflow, telemetry, cloud service, automatic download, or network listener. Controllers use a current-user-only named pipe. Newly created private directories restrict access to the current Windows user. OS memory/paging/dumps/backups, a compromised OS, and user-configured synchronization remain outside the app's control. Ordinary deletion is not forensic erasure. Zoom/Teams use their own network connections.
 
