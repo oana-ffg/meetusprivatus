@@ -45,5 +45,6 @@ public static class ControlServer
         }
         catch (OperationCanceledException) { return null; }
         catch (IOException) { return null; }
+        catch (JsonException) { return null; } // A worker can exit midway through its status reply.
     }
 }
