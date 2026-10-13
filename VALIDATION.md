@@ -1,4 +1,19 @@
-# Prototype validation — 2026-10-10
+# Prototype validation — 2026-10-13
+
+## Capture discontinuity correction — 2026-10-13
+
+The normal worker was run with its real microphone and output-device capture on a development desktop. Speaking with the desktop idle reproduced recurring microphone discontinuities. No meeting-client or target-laptop acceptance is implied by these runs.
+
+- Capture was inheriting the worker's BelowNormal scheduling without MMCSS registration. With empty callbacks already ignored, a 195.56-second run still produced 38 microphone discontinuities and a maximum 1,019.08 ms interval between audio callbacks. Many occurred without recognition active; the capture packet queue did not overflow.
+- Both endpoint capture threads now request MMCSS Audio priority, while recognition stays CPU-only in the BelowNormal worker. A 211.23-second comparison produced microphone and playback text, zero microphone discontinuities, and a maximum 13.86 ms microphone callback interval. Both capture threads reported priority level 15. Two playback flags coincided with deliberate player restarts between public clips.
+- Roughly half the recorder callbacks carried zero frames and unset timing. Treating these as audio falsely marked native timing as unavailable and consumed packet-queue slots. No-data callbacks are now ignored before timeline/queue updates; real silence packets with nonzero frame counts are retained. Real audio in the corrected runs used valid native timestamps for both sources.
+- A final 135.20-second normal-worker run with real mic capture and six quiet public speech clips concatenated into one continuous playback stream produced zero discontinuities on either source, committed playback text, completed gracefully, and left zero temporary audio files. The maximum capture packet queue depth was 23 of 256. This final run contained no recognized microphone speech; microphone text was verified in the preceding comparison.
+- Content-free session metadata now retains bounded timing/queue/GC measurements and up to 64 discontinuity events per source. Capture errors retain type/HRESULT without exception messages or spoken text. The regression check verifies that empty callbacks cannot split clips, create gaps, or replace valid native timing.
+- Warnings-as-errors build/publication and all 24 behavioral checks passed. The two native checks, separate baseline CPU check, and console cancellation/cleanup check also passed. An existing repair-lock check failed once on a rebuild, then passed in isolation and in the full final suite; that transient failure's cause was not established.
+
+Playback stream transitions can legitimately produce discontinuity flags even when no speech was playing during the interval. The flag alone does not quantify lost speech; gap reporting has not been suppressed. The earlier fatal capture-queue overflow did not reproduce during this work and still requires separate validation. Meeting-client, sustained target-laptop, accent, full-retention-watchdog, and network-observation gates below remain open.
+
+## Initial validation — 2026-10-10
 
 The manual-start prototype builds and publishes successfully with warnings treated as errors. Seventeen distinct tests pass with native checks explicitly enabled: fourteen behavioral/control checks, two native pipeline checks, and one baseline CPU check in a fresh process. The ordinary build intentionally skips the three native tests. The separate console check verifies real Windows Ctrl+C delivery during startup without opening a microphone.
 

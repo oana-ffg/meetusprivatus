@@ -55,6 +55,7 @@ public sealed class NativeRecognitionTests(ITestOutputHelper output)
         var timeline = new CaptureTimeline(startedTimestamp, 100);
         recorder.DataAvailable += (buffer, flags, _, qpc) =>
         {
+            if (buffer.IsEmpty) return;
             var discontinuity = (flags & AudioClientBufferFlags.DataDiscontinuity) != 0;
             var timing = timeline.Stamp(buffer.Length / 2, qpc,
                 (flags & AudioClientBufferFlags.TimestampError) == 0, discontinuity, Stopwatch.GetTimestamp());
@@ -81,6 +82,7 @@ public sealed class NativeRecognitionTests(ITestOutputHelper output)
         Assert.Empty(failures);
         var audio = Recognizer.DecodePcm(packets.SelectMany(packet => packet.Pcm).ToArray());
         Assert.Contains(audio, sample => Math.Abs(sample) > 0.001);
+        Assert.All(packets, packet => Assert.NotEmpty(packet.Pcm));
         Assert.All(packets, packet => Assert.InRange(packet.StartSeconds, 0, 4));
         using var directory = new TestDirectory();
         var clips = new List<AudioClip>(); var gaps = new List<TranscriptRecord>();

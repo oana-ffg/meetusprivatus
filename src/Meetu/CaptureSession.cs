@@ -58,6 +58,7 @@ public sealed class CaptureSession
         ClipWorkspace? workspace = null;
         IClipRecognizer? recognizer = null;
         ISessionAudioCapture? capture = null;
+        CaptureDiagnostics? diagnostics = null;
         try
         {
             if (stop.Task.IsCompleted) { Update(new SessionStatus("Complete")); return; }
@@ -72,26 +73,33 @@ public sealed class CaptureSession
             JsonFiles.Write(Path.Combine(directory, "session.json"), new
             { StartedUtc = startedUtc, State = "Capturing", capture.MicrophoneId, capture.PlaybackId });
             var startedTimestamp = Stopwatch.GetTimestamp();
+            diagnostics = new CaptureDiagnostics(startedTimestamp);
             var localClock = new CaptureTimeline(startedTimestamp, 100);
             var remoteClock = new CaptureTimeline(startedTimestamp, 100);
             sessionClock.Restart();
 
-            void Receive(AudioSource source, ReadOnlySpan<byte> buffer, AudioClientBufferFlags flags, long qpc)
+            void Receive(AudioSource source, ReadOnlySpan<byte> buffer, AudioClientBufferFlags flags, long position, long qpc)
             {
                 // The library lends the native buffer only until this callback returns.
                 // No disk, inference, blocking queue writes, or logging occur here.
                 if (buffer.Length > 32000 || buffer.Length % 2 != 0)
                 { fault.TrySetResult("Capture returned an invalid or oversized audio packet."); return; }
+                var arrival = Stopwatch.GetTimestamp();
+                diagnostics.Received(source, buffer.Length, flags, position, qpc, arrival, packets.Reader.Count);
+                // WASAPI can report no available frames. This is not an audio packet and its
+                // unset timing fields must not replace the previous real packet's timeline.
+                if (buffer.IsEmpty) { diagnostics.CallbackCompleted(source, arrival); return; }
                 var discontinuity = (flags & AudioClientBufferFlags.DataDiscontinuity) != 0;
                 var clock = source == AudioSource.Local ? localClock : remoteClock;
                 var timing = clock.Stamp(buffer.Length / 2, qpc,
-                    (flags & AudioClientBufferFlags.TimestampError) == 0, discontinuity, Stopwatch.GetTimestamp());
+                    (flags & AudioClientBufferFlags.TimestampError) == 0, discontinuity, arrival);
                 if (!packets.Writer.TryWrite(new AudioPacket(source, buffer.ToArray(), timing.StartSeconds,
                     discontinuity, timing.CapturedTimestamp)))
                     fault.TrySetResult("Audio capture queue filled. Capture stopped to protect meeting responsiveness.");
+                diagnostics.CallbackCompleted(source, arrival);
             }
-            assembleTask = AssembleAsync(packets.Reader, clips.Writer, workspace.DirectoryPath, transcripts);
-            recognitionTask = RecognizeAsync(clips.Reader, recognizer, transcripts, cancelInference.Token);
+            assembleTask = AssembleAsync(packets.Reader, clips.Writer, workspace.DirectoryPath, transcripts, diagnostics);
+            recognitionTask = RecognizeAsync(clips.Reader, recognizer, transcripts, diagnostics, cancelInference.Token);
             monitorTask = MonitorAsync(capture, workspace, cancelMonitor.Token);
             using var captureDeadline = new CancellationTokenSource(TimeSpan.FromMinutes(config.MaxSessionMinutes));
             using var deadlineRegistration = captureDeadline.Token.Register(Stop);
@@ -118,7 +126,8 @@ public sealed class CaptureSession
             JsonFiles.Write(Path.Combine(directory, "session.json"), new
             { StartedUtc = startedUtc, capture.MicrophoneId, capture.PlaybackId,
                 EstimatedMicrophoneTiming = localClock.UsedEstimatedTiming, EstimatedPlaybackTiming = remoteClock.UsedEstimatedTiming,
-                State = status.State, EndedUtc = DateTimeOffset.UtcNow, CaptureSeconds = captureSeconds, Error = error });
+                State = status.State, EndedUtc = DateTimeOffset.UtcNow, CaptureSeconds = captureSeconds, Error = error,
+                CaptureDiagnostics = diagnostics.Snapshot() });
         }
         catch (Exception exception)
         {
@@ -141,7 +150,8 @@ public sealed class CaptureSession
             if (transcripts is not null)
             {
                 try { JsonFiles.Write(Path.Combine(transcripts.DirectoryPath, "session.json"), new
-                { StartedUtc = startedUtc, State = "Failed", EndedUtc = DateTimeOffset.UtcNow, CaptureSeconds = captureSeconds, Error = error }); }
+                { StartedUtc = startedUtc, State = "Failed", EndedUtc = DateTimeOffset.UtcNow, CaptureSeconds = captureSeconds, Error = error,
+                    CaptureDiagnostics = diagnostics?.Snapshot() }); }
                 catch { /* An unavailable destination is already reported in status. */ }
             }
         }
@@ -158,20 +168,24 @@ public sealed class CaptureSession
     }
 
     private async Task AssembleAsync(ChannelReader<AudioPacket> packets, ChannelWriter<AudioClip> clips,
-        string workspace, TranscriptStore transcripts)
+        string workspace, TranscriptStore transcripts, CaptureDiagnostics diagnostics)
     {
         void Emit(AudioClip clip)
         {
             if (!clips.TryWrite(clip)) throw new IOException("Pending clip queue filled.");
         }
         // Only this task writes capture-gap records; recognition also commits under a common lock.
-        void Gap(TranscriptRecord record) { lock (transcripts) transcripts.Commit(record); }
+        void Gap(TranscriptRecord record) => CommitTranscript(transcripts, record, diagnostics);
         using var local = new ClipAssembler(AudioSource.Local, workspace, budget, config.ClipSeconds, Emit, Gap);
         using var remote = new ClipAssembler(AudioSource.Remote, workspace, budget, config.ClipSeconds, Emit, Gap);
         try
         {
             await foreach (var packet in packets.ReadAllAsync())
+            {
+                var started = Stopwatch.GetTimestamp();
                 (packet.Source == AudioSource.Local ? local : remote).Append(packet);
+                diagnostics.AssemblyCompleted(started);
+            }
             local.Finish(); remote.Finish();
         }
         catch
@@ -184,7 +198,7 @@ public sealed class CaptureSession
     }
 
     private async Task RecognizeAsync(ChannelReader<AudioClip> clips, IClipRecognizer recognizer,
-        TranscriptStore transcripts, CancellationToken cancellationToken)
+        TranscriptStore transcripts, CaptureDiagnostics diagnostics, CancellationToken cancellationToken)
     {
         await foreach (var clip in clips.ReadAllAsync())
         {
@@ -198,13 +212,18 @@ public sealed class CaptureSession
                 {
                     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                     deadline.CancelAfter(remaining);
-                    try { record = await recognizer.TranscribeAsync(clip, deadline.Token); }
+                    try
+                    {
+                        diagnostics.RecognitionStarted();
+                        record = await recognizer.TranscribeAsync(clip, deadline.Token);
+                    }
                     catch (OperationCanceledException) when (deadline.IsCancellationRequested)
                     { record = Missing(clip, cancellationToken.IsCancellationRequested); }
                     catch (FileNotFoundException) when (Stopwatch.GetElapsedTime(clip.CreatedTimestamp) >= PendingBudget.MaximumAge - PendingBudget.ExpiryMargin)
                     { record = Missing(clip, false); }
+                    finally { diagnostics.RecognitionEnded(); }
                 }
-                lock (transcripts) transcripts.Commit(record);
+                CommitTranscript(transcripts, record, diagnostics);
             }
             catch
             {
@@ -217,6 +236,12 @@ public sealed class CaptureSession
                 budget.Remove(clip.Id);
             }
         }
+    }
+
+    private static void CommitTranscript(TranscriptStore transcripts, TranscriptRecord record, CaptureDiagnostics diagnostics)
+    {
+        var started = Stopwatch.GetTimestamp();
+        lock (transcripts) { transcripts.Commit(record); diagnostics.CommitCompleted(started); }
     }
 
     private static TranscriptRecord Missing(AudioClip clip, bool sessionFailure) => new(clip.Id, clip.Source,

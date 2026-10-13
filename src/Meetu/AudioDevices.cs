@@ -22,8 +22,10 @@ public static class AudioDevices
     }
 
     public static WasapiRecorder CreateMicrophoneRecorder(MMDevice device) => new WasapiRecorderBuilder()
-        .WithDevice(device).WithSharedMode().WithFormat(new WaveFormat(16000, 16, 1)).Build();
+        .WithDevice(device).WithSharedMode().WithMmcssThreadPriority("Audio")
+        .WithFormat(new WaveFormat(16000, 16, 1)).Build();
 
     public static WasapiRecorder CreatePlaybackRecorder(MMDevice device) => new WasapiRecorderBuilder()
-        .WithDevice(device).WithSharedMode().WithLoopbackCapture().WithFormat(new WaveFormat(16000, 16, 1)).Build();
+        .WithDevice(device).WithSharedMode().WithLoopbackCapture().WithMmcssThreadPriority("Audio")
+        .WithFormat(new WaveFormat(16000, 16, 1)).Build();
 }

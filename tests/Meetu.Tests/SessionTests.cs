@@ -7,6 +7,44 @@ namespace Meetu.Tests;
 
 public sealed class SessionTests
 {
+    [Fact]
+    public async Task EmptyCallbacksCannotCreateGapsOrReplaceNativeAudioTiming()
+    {
+        using var directory = new TestDirectory();
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        var model = Path.Combine(directory.Path, "synthetic-model.bin"); File.WriteAllBytes(model, [0]);
+        var config = new AppConfig { OutputDirectory = Path.Combine(directory.Path, "transcripts"),
+            ModelPath = model, VadPath = model, ClipSeconds = 5 };
+        var capture = new SyntheticCapture();
+        var recognizer = new PausedRecognizer(); recognizer.Resume.TrySetResult();
+        var session = new CaptureSession(config, paths, _ => capture, _ => recognizer);
+        using var workerLock = new FileStream(Path.Combine(paths.Root, "worker.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var run = session.RunAsync();
+        try
+        {
+            await capture.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            foreach (var source in Enum.GetValues<AudioSource>())
+                for (var packet = 0; packet < 5; packet++)
+                {
+                    capture.Emit(source);
+                    // GetBuffer can return no frames with unset metadata. Even flags on that
+                    // callback must not split audio, invent a gap, or change its timing source.
+                    capture.EmitEmpty(source);
+                }
+        }
+        finally { session.Stop(); await run.WaitAsync(TimeSpan.FromSeconds(5)); }
+        Assert.Equal("Complete", session.Status.State);
+        Assert.Equal(2, recognizer.Completed.Count);
+        Assert.All(recognizer.Completed, clip => Assert.Equal(80000, clip.SampleCount));
+        using var metadata = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(session.Status.SessionDirectory!, "session.json")));
+        Assert.False(metadata.RootElement.GetProperty("EstimatedMicrophoneTiming").GetBoolean());
+        Assert.False(metadata.RootElement.GetProperty("EstimatedPlaybackTiming").GetBoolean());
+        foreach (var source in new[] { "local.txt", "remote.txt" })
+            Assert.DoesNotContain("[GAP:", File.ReadAllText(Path.Combine(session.Status.SessionDirectory!, source)));
+        Assert.Equal(0, session.Status.PendingBytes);
+        Assert.Empty(Directory.GetDirectories(paths.AudioRoot));
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -109,8 +147,10 @@ public sealed class SessionTests
         {
             var timestamp = startedTimestamp + packets[(int)source]++ * Stopwatch.Frequency;
             var qpc = (long)(timestamp * (10_000_000.0 / Stopwatch.Frequency));
-            receive!(source, new byte[32000], (AudioClientBufferFlags)0, qpc);
+            receive!(source, new byte[32000], (AudioClientBufferFlags)0, packets[(int)source] * 16000L, qpc);
         }
+        public void EmitEmpty(AudioSource source) => receive!(source, [],
+            AudioClientBufferFlags.DataDiscontinuity | AudioClientBufferFlags.TimestampError, 0, 0);
         public ValueTask StopAsync() { Stopped.TrySetResult(); return ValueTask.CompletedTask; }
         public ValueTask DisposeAsync() { Disposed = true; return StopAsync(); }
     }

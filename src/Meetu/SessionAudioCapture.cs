@@ -3,7 +3,7 @@ using NAudio.Wave;
 
 namespace Meetu;
 
-internal delegate void CaptureBuffer(AudioSource source, ReadOnlySpan<byte> buffer, AudioClientBufferFlags flags, long qpc);
+internal delegate void CaptureBuffer(AudioSource source, ReadOnlySpan<byte> buffer, AudioClientBufferFlags flags, long devicePosition, long qpc);
 
 internal interface ISessionAudioCapture : IAsyncDisposable
 {
@@ -41,12 +41,16 @@ internal sealed class SessionAudioCapture : ISessionAudioCapture
     {
         local = AudioDevices.CreateMicrophoneRecorder(microphone);
         remote = AudioDevices.CreatePlaybackRecorder(playback);
-        local.DataAvailable += (buffer, flags, _, qpc) => receive(AudioSource.Local, buffer, flags, qpc);
-        remote.DataAvailable += (buffer, flags, _, qpc) => receive(AudioSource.Remote, buffer, flags, qpc);
-        local.RecordingStopped += (_, args) => { if (args.Exception is not null) failed("Microphone capture failed. Check the selected device."); };
-        remote.RecordingStopped += (_, args) => { if (args.Exception is not null) failed("Output capture failed. Check the selected playback device."); };
+        local.DataAvailable += (buffer, flags, position, qpc) => receive(AudioSource.Local, buffer, flags, position, qpc);
+        remote.DataAvailable += (buffer, flags, position, qpc) => receive(AudioSource.Remote, buffer, flags, position, qpc);
+        local.RecordingStopped += (_, args) => { if (args.Exception is not null) failed(CaptureFailure("Microphone", args.Exception)); };
+        remote.RecordingStopped += (_, args) => { if (args.Exception is not null) failed(CaptureFailure("Output", args.Exception)); };
         local.StartRecording(); remote.StartRecording();
     }
+
+    private static string CaptureFailure(string source, Exception exception) =>
+        // Exception messages can contain user data; retain only content-free diagnostic identifiers.
+        FormattableString.Invariant($"{source} capture failed ({exception.GetType().Name}, HRESULT 0x{exception.HResult:X8}). Check the selected device.");
 
     public async ValueTask StopAsync()
     {
