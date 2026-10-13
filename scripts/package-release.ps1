@@ -41,6 +41,13 @@ try {
     & (Join-Path $publication 'meetus.exe') help | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Published executable smoke check failed.' }
     & (Join-Path $PSScriptRoot 'test-console.ps1') -PublishDirectory $publication -Models (Join-Path $publication 'models')
+    # Startup checking can create the adjacent output directory. Ship no output, even an empty folder.
+    # Nonrecursive deletion deliberately fails if the check unexpectedly left any files.
+    $transcripts = Join-Path $publication 'transcripts'
+    if ([IO.Directory]::Exists($transcripts)) {
+        if (([IO.File]::GetAttributes($transcripts) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Unexpected linked release output directory.' }
+        [IO.Directory]::Delete($transcripts)
+    }
     # A running app creates this lease, but it is installation state rather than a release asset.
     $lease = Join-Path $publication '.update.lock'
     if (Test-Path -LiteralPath $lease) { Remove-Item -LiteralPath $lease }
