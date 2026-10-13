@@ -6,7 +6,13 @@ A small Windows 11 meeting transcriber. It captures the mic and everything playe
 
 ## Download and run
 
-Download the Windows x64 ZIP from this repository's Releases page, extract it, and double-click `Start.cmd` inside the extracted folder. The archive includes the .NET runtime and verified Whisper/Silero models; no SDK or model download is needed. Windows 11 x64 and the Microsoft Visual C++ x64 redistributable are required. Preview releases retain the validation limits stated above.
+1. Use Windows 11 x64 and install the [Microsoft Visual C++ x64 redistributable](https://aka.ms/vc14/vc_redist.x64.exe).
+2. Download the Windows x64 ZIP asset from [Releases](https://github.com/oana-ffg/meetusprivatus/releases). Use **Extract All** into a local folder outside network drives, links/junctions, and cloud-placeholder folders. Keep all extracted files together; do not run from inside the ZIP.
+3. Allow desktop apps to access the microphone in Windows **Settings → Privacy & security → Microphone**. Use headphones, select the intended Windows default output and default communications microphone, and use those same devices in Zoom/Teams.
+4. Open the extracted application folder and double-click `Start.cmd`. Press **Ctrl+C** to stop early, then leave the window open while queued transcription finishes. Otherwise capture stops after 60 minutes.
+5. Open `%LOCALAPPDATA%\MeetusPrivatus\transcripts` in File Explorer. Each session contains `local.txt` for microphone speech and `remote.txt` for output playback.
+
+The archive includes the .NET runtime and verified Whisper/Silero models; no SDK or model download is needed. No account or GPU is required. Mic capture includes speech while muted in Zoom/Teams, and playback includes other apps on the selected output. Preview releases retain the validation limits stated above.
 
 ## Build and setup
 
