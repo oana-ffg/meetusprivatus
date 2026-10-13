@@ -26,7 +26,7 @@ try {
     if ($Publish) {
         dotnet publish src/Meetu/Meetu.csproj -c Release --self-contained true -o $PublishDirectory
         if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
-        Copy-Item -LiteralPath LICENSE, THIRD-PARTY-NOTICES.md, README.md, Start.cmd -Destination $PublishDirectory
+        Copy-Item -LiteralPath LICENSE, THIRD-PARTY-NOTICES.md, README.md, Start.cmd, Update.cmd, Update.ps1 -Destination $PublishDirectory
         Copy-Item -LiteralPath licenses -Destination $PublishDirectory -Recurse -Force
         $runtimeConfig = Get-Content -LiteralPath (Join-Path $PublishDirectory 'meetus.runtimeconfig.json') -Raw | ConvertFrom-Json
         $runtimeVersion = @($runtimeConfig.runtimeOptions.includedFrameworks | Where-Object name -eq 'Microsoft.NETCore.App')[0].version

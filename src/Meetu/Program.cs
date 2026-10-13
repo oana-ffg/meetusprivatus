@@ -13,16 +13,17 @@ public static class Program
             if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
                 throw new PlatformNotSupportedException("Meetus Privatus requires Windows 11.");
             if (args.Length == 0 || args[0] is "help" or "--help" or "-h") { PrintHelp(); return 0; }
+            using var installationLease = args[0] is "run" or "start" or "worker" ? AcquireInstallationLease() : null;
             var options = ParseOptions(args[1..]);
             var paths = new StatePaths(options.GetValueOrDefault("state-dir"));
             switch (args[0])
             {
                 case "config":
                     RequireOptions(options, "state-dir", "output-dir", "model", "vad", "mic", "playback", "threads", "clip-seconds", "max-minutes");
-                    var config = paths.LoadConfig();
-                    config = WithDefaultOutput(paths, config with
+                    var config = MigrateDefaultOutput(paths, paths.LoadConfig());
+                    config = config with
                     {
-                        OutputDirectory = AbsoluteOption(options, "output-dir", config.OutputDirectory),
+                        OutputDirectory = options.TryGetValue("output-dir", out var output) ? DefaultableAbsolute(output) : config.OutputDirectory,
                         ModelPath = options.TryGetValue("model", out var model) ? DefaultableAbsolute(model) : config.ModelPath,
                         VadPath = options.TryGetValue("vad", out var vad) ? DefaultableAbsolute(vad) : config.VadPath,
                         MicrophoneId = options.TryGetValue("mic", out var mic) ? (mic == "default" ? null : mic) : config.MicrophoneId,
@@ -30,7 +31,7 @@ public static class Program
                         Threads = IntOption(options, "threads", config.Threads),
                         ClipSeconds = IntOption(options, "clip-seconds", config.ClipSeconds),
                         MaxSessionMinutes = IntOption(options, "max-minutes", config.MaxSessionMinutes)
-                    });
+                    };
                     config = config.WithMissingDefaultModelsUnpinned();
                     if (options.Keys.Any(key => key != "state-dir")) { config.Validate(); JsonFiles.Write(paths.ConfigFile, config); }
                     Console.WriteLine(JsonSerializer.Serialize(config, JsonFiles.Options)); return 0;
@@ -93,14 +94,33 @@ public static class Program
     private static void PrepareConfig(StatePaths paths)
     {
         var saved = paths.LoadConfig();
-        var config = WithDefaultOutput(paths, saved.WithMissingDefaultModelsUnpinned());
+        var config = MigrateDefaultOutput(paths, saved.WithMissingDefaultModelsUnpinned());
         config.Validate();
-        if (config != saved) JsonFiles.Write(paths.ConfigFile, config);
+        // Also materialize implicit defaults from manually supplied/older minimal settings files.
+        JsonFiles.Write(paths.ConfigFile, config);
     }
 
-    // First use saves the private transcripts folder, whether it starts with run, start, or config.
-    private static AppConfig WithDefaultOutput(StatePaths paths, AppConfig config) =>
-        config.OutputDirectory is null ? config with { OutputDirectory = Path.Combine(paths.Root, "transcripts") } : config;
+    // Migrate the previous standard destination, without moving existing text or pinning this install.
+    private static AppConfig MigrateDefaultOutput(StatePaths paths, AppConfig config) =>
+        string.Equals(config.OutputDirectory, Path.Combine(paths.Root, "transcripts"), StringComparison.OrdinalIgnoreCase)
+            ? config with { OutputDirectory = null } : config;
+
+    private static FileStream AcquireInstallationLease()
+    {
+        var leasePath = Path.Combine(AppContext.BaseDirectory, ".update.lock");
+        LocalPath.Require(leasePath);
+        LocalPath.Require(Path.Combine(AppContext.BaseDirectory, ".update-pending"));
+        FileStream lease;
+        try { lease = new FileStream(leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite); }
+        catch (IOException exception) when (exception.HResult == unchecked((int)0x80070020))
+        { throw new InvalidOperationException("An update is in progress. Wait for Update.cmd to finish before recording."); }
+        if (Directory.Exists(Path.Combine(AppContext.BaseDirectory, ".update-pending")))
+        {
+            lease.Dispose();
+            throw new InvalidOperationException("An update was interrupted. Run Update.cmd to restore or finish it before recording.");
+        }
+        return lease;
+    }
 
     // The worker holds this exclusive handle for its lifetime; cleanup and repair take it briefly.
     private static FileStream AcquireWorkerLock(StatePaths paths)
@@ -147,7 +167,7 @@ public static class Program
         if (interactive)
         {
             Console.WriteLine(session.Status.State == "Complete"
-                ? $"Finished. Transcripts: {session.Status.SessionDirectory ?? config.OutputDirectory}"
+                ? $"Finished. Transcripts: {session.Status.SessionDirectory ?? config.ResolvedOutputDirectory}"
                 : session.Status.Error);
             if (session.Status.State != "Complete" && !Console.IsInputRedirected)
             { Console.WriteLine("Press any key to close."); Console.ReadKey(intercept: true); }
@@ -195,13 +215,12 @@ public static class Program
     }
     private static int IntOption(Dictionary<string, string> options, string key, int fallback) => options.TryGetValue(key, out var value)
         ? int.Parse(value, System.Globalization.CultureInfo.InvariantCulture) : fallback;
-    private static string? AbsoluteOption(Dictionary<string, string> options, string key, string? fallback) => options.TryGetValue(key, out var value) ? Path.GetFullPath(value) : fallback;
     private static string? DefaultableAbsolute(string value) => value == "default" ? null : Path.GetFullPath(value);
 
     private static void PrintHelp() => Console.WriteLine("""
         Meetus Privatus — private, CPU-only meeting transcripts
 
-        config [--output-dir PATH] [--model FILE|default] [--vad FILE|default] [--mic ID|default] [--playback ID|default]
+        config [--output-dir PATH|default] [--model FILE|default] [--vad FILE|default] [--mic ID|default] [--playback ID|default]
                [--threads 1|2] [--clip-seconds 5..30] [--max-minutes 1..1440]
         config                     Show saved configuration
         devices                    List input and output device IDs

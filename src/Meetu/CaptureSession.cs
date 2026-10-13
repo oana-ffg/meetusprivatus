@@ -63,11 +63,12 @@ public sealed class CaptureSession
         {
             if (stop.Task.IsCompleted) { Update(new SessionStatus("Complete")); return; }
             config.Validate();
+            PrivateDirectory.Create(config.ResolvedOutputDirectory);
             workspace = new ClipWorkspace(paths.AudioRoot, sessionId);
             recognizer = openRecognizer(config);
             if (stop.Task.IsCompleted) { Update(new SessionStatus("Complete")); return; }
             capture = openCapture(config);
-            var directory = Path.Combine(config.OutputDirectory!, DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + sessionId);
+            var directory = Path.Combine(config.ResolvedOutputDirectory, DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + sessionId);
             transcripts = new TranscriptStore(directory);
             startedUtc = DateTimeOffset.UtcNow;
             JsonFiles.Write(Path.Combine(directory, "session.json"), new

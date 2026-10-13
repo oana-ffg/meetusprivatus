@@ -10,9 +10,17 @@ A small Windows 11 meeting transcriber. It captures the mic and everything playe
 2. Download the Windows x64 ZIP asset from [Releases](https://github.com/oana-ffg/meetusprivatus/releases). Use **Extract All** into a local folder outside network drives, links/junctions, and cloud-placeholder folders. Keep all extracted files together; do not run from inside the ZIP.
 3. Allow desktop apps to access the microphone in Windows **Settings → Privacy & security → Microphone**. Use headphones, select the intended Windows default output and default communications microphone, and use those same devices in Zoom/Teams.
 4. Open the extracted application folder and double-click `Start.cmd`. Press **Ctrl+C** to stop early, then leave the window open while queued transcription finishes. Otherwise capture stops after 60 minutes.
-5. Open `%LOCALAPPDATA%\MeetusPrivatus\transcripts` in File Explorer. Each session contains `local.txt` for microphone speech and `remote.txt` for output playback.
+5. Open the `transcripts` folder beside `Start.cmd` and `meetus.exe`. Each session contains `local.txt` for microphone speech and `remote.txt` for output playback.
 
 The archive includes the .NET runtime and verified Whisper/Silero models; no SDK or model download is needed. No account or GPU is required. Mic capture includes speech while muted in Zoom/Teams, and playback includes other apps on the selected output. Preview releases retain the validation limits stated above.
+
+## Update
+
+**Stop recording and let queued transcription finish, then double-click `Update.cmd`.** It checks the most recently published release, including previews, downloads the complete package, verifies its SHA-256 checksum and every packaged file, and updates the current folder. Transcripts, saved settings, and unrelated user files are preserved. No GitHub account, browser download, or re-extraction is needed for subsequent updates. Install this release once to obtain the updater; earlier releases do not include it.
+
+Updates are explicitly requested downloads from this public GitHub repository. The updater never reads or uploads meeting content. `Start.cmd` and the recording application remain offline and never invoke the updater. A recording and an update cannot run together. If replacement fails, the previous version is restored; if Windows interrupts recovery, run `Update.cmd` again before recording. It preserves the backup and blocks recording until recovery finishes. Modified packaged files or colliding user files cause an inspectable error instead of being silently overwritten.
+
+For an offline update, bring the release ZIP and its `.zip.sha256` file to the machine. With both files in the application folder, this release can be installed using `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Update.ps1 -Archive .\meetus-privatus-0.1.0-preview.3-win-x64.zip -Checksum .\meetus-privatus-0.1.0-preview.3-win-x64.zip.sha256`. The same integrity and preservation checks apply. Use a writable local application folder without links or junctions.
 
 ## Build and setup
 
@@ -44,7 +52,7 @@ $meetus = (Resolve-Path .artifacts\publish\meetus.exe).Path
 
 The launcher opens a small status console, without live transcript text. Ctrl+C and auto-stop end capture, then finish queued transcription and delete each clip after saving its text. Leave the window open while it finishes; it closes when done. Closing the window forcibly can interrupt cleanup. The pending-audio retention limit still applies during finishing.
 
-The first launch automatically saves defaults. Transcripts go to `%LOCALAPPDATA%\MeetusPrivatus\transcripts`. To change the recording duration or destination, open `%LOCALAPPDATA%\MeetusPrivatus\config.json` and edit `MaxSessionMinutes` (default 60; 1–1440) or `OutputDirectory`. JSON paths use doubled backslashes. Changes affect the next session. No configuration is needed for normal use.
+The first launch automatically saves defaults. Transcripts go to `transcripts` beside `meetus.exe`. The previous standard AppData destination automatically returns to this default for future sessions; existing text stays in its old location. Explicit custom destinations are preserved. To change the recording duration or destination, open `%LOCALAPPDATA%\MeetusPrivatus\config.json` and edit `MaxSessionMinutes` (default 60; 1–1440) or `OutputDirectory`. A null output directory follows the application folder, including after moving it. `config --output-dir default` restores this default. JSON paths use doubled backslashes. Changes affect the next session. No configuration is needed for normal use.
 
 For development or optional advanced control, the CLI remains available (`$meetus` is the published `meetus.exe` path, as above):
 
@@ -91,15 +99,18 @@ Failures are inspectable through `status` and nonzero exit codes; there are no n
 ```powershell
 .\scripts\build.ps1
 .\scripts\test-native.ps1
+.\scripts\test-update.ps1
 ```
 
 The normal suite skips native checks. `test-native.ps1` and `package-release.ps1` read models from the repository's `models` folder by default; pass `-Models .artifacts\publish\models` to reuse the setup download above. The native script downloads a hash-pinned **public JFK speech fixture** if absent, tests speech/silence and output-device playback-to-text, publishes the app, then validates baseline CPU in a fresh process and real Windows Ctrl+C during startup in an isolated hidden console. The console check deliberately selects a nonexistent mic and checks graceful completion, owned-audio cleanup, and automatic settings. It can also be run independently with `scripts/test-console.ps1` after publication. The playback check briefly plays quiet public speech through the current output device and never opens the mic. Close meetings/media first: it refuses unrelated active playback before/during capture and before writing/transcribing captured data. This polling guard cannot guarantee detection of very brief sounds. Cached fixtures/models permit recognition tests without new downloads.
 
 Use `--state-dir` to isolate development CLI state. Keep generated models/audio/transcripts/test outputs/publication ignored. See [REQUIREMENTS.md](REQUIREMENTS.md), [SPEC.md](SPEC.md), and [AGENTS.md](AGENTS.md) for scope and outstanding acceptance checks.
 
+`test-update.ps1` builds isolated copies and exercises the actual offline updater with verified local models, synthetic user files, checksum/traversal/collision rejection, installation locking, failed file replacement, journal recovery, obsolete-file removal, and preservation of transcripts. It does not capture audio or contact GitHub.
+
 ## Release packaging
 
-Maintainers can run `scripts/package-release.ps1` from a clean committed checkout with local verified models. It builds/tests into a fresh directory, includes models/notices and a source-commit manifest, checks console cancellation, and writes a ZIP plus SHA-256 file under ignored `.artifacts/releases`. Existing release assets are never overwritten.
+Maintainers can run `scripts/package-release.ps1` from a clean committed checkout with local verified models. It builds/tests into a fresh directory, includes models, launchers, updater, notices, and a source-commit manifest with per-file hashes, checks console cancellation, and writes a ZIP plus SHA-256 file under ignored `.artifacts/releases`. Existing release assets are never overwritten.
 
 ## License
 

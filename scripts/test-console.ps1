@@ -105,7 +105,7 @@ try {
     if ($exitCode -ne 0 -or $status.State -ne 'Complete') { throw "Ctrl+C did not reach graceful completion (exit $exitCode, state $($status.State))." }
     if (@(Get-ChildItem -LiteralPath (Join-Path $stateRoot 'audio') -Filter '*.pcm' -Recurse).Count -ne 0) { throw 'Owned audio remained after cancellation.' }
     $config = Get-Content -LiteralPath (Join-Path $stateRoot 'config.json') -Raw | ConvertFrom-Json
-    if ($config.OutputDirectory -ne (Join-Path $stateRoot 'transcripts') -or $config.MaxSessionMinutes -ne 60) {
+    if ($null -ne $config.OutputDirectory -or $config.MaxSessionMinutes -ne 60) {
         throw 'First-run defaults were not saved correctly.'
     }
 } catch {

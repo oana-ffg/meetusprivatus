@@ -7,6 +7,8 @@ transcripts/
 *.user
 *.suo
 TestResults/
+.update.lock
+.update-pending/
 *.pcm
 **/local.txt
 **/remote.txt

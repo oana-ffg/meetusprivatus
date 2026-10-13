@@ -38,15 +38,23 @@ try {
             throw "Release model integrity failed: $($asset.Name)."
         }
     }
+    & (Join-Path $publication 'meetus.exe') help | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Published executable smoke check failed.' }
+    & (Join-Path $PSScriptRoot 'test-console.ps1') -PublishDirectory $publication -Models (Join-Path $publication 'models')
+    # A running app creates this lease, but it is installation state rather than a release asset.
+    $lease = Join-Path $publication '.update.lock'
+    if (Test-Path -LiteralPath $lease) { Remove-Item -LiteralPath $lease }
+    $files = @(Get-ChildItem -LiteralPath $publication -File -Recurse | Sort-Object FullName | ForEach-Object {
+        @{ Path = $_.FullName.Substring($publication.Length + 1).Replace('\', '/'); Size = $_.Length;
+           Hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+    })
     @{
         Version = $version
         Commit = $commit
         Runtime = 'win-x64'
         Models = $modelAssets
+        Files = $files
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $publication 'release.json') -Encoding utf8
-    & (Join-Path $publication 'meetus.exe') help | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Published executable smoke check failed.' }
-    & (Join-Path $PSScriptRoot 'test-console.ps1') -PublishDirectory $publication -Models (Join-Path $publication 'models')
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zipPath, [IO.Compression.CompressionLevel]::Optimal, $false)
     $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()

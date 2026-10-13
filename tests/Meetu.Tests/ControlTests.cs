@@ -78,7 +78,8 @@ public sealed class ControlTests
         // Device setup can precede the first recording; it must not require choosing an output directory.
         Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--model", model, "--vad", model, "--mic", "configured-input"]));
         var saved = paths.LoadConfig();
-        Assert.Equal(Path.Combine(paths.Root, "transcripts"), saved.OutputDirectory);
+        Assert.Null(saved.OutputDirectory);
+        Assert.Equal(Path.Combine(AppContext.BaseDirectory, "transcripts"), saved.ResolvedOutputDirectory);
         Assert.Equal("configured-input", saved.MicrophoneId);
         // Unset model paths stay unset in saved settings, so a moved or upgraded app finds its own models.
         var defaults = new AppConfig { OutputDirectory = saved.OutputDirectory };
@@ -87,6 +88,39 @@ public sealed class ControlTests
         var json = System.Text.Json.JsonSerializer.Serialize(defaults, JsonFiles.Options);
         Assert.DoesNotContain("ggml", json);
         Assert.Null(System.Text.Json.JsonSerializer.Deserialize<AppConfig>(json, JsonFiles.Options)!.ModelPath);
+    }
+
+    [Fact]
+    public async Task LegacyDefaultOutputMigratesButCustomDestinationAndOldTextSurvive()
+    {
+        using var directory = new TestDirectory();
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        var legacy = Path.Combine(paths.Root, "transcripts");
+        Directory.CreateDirectory(legacy);
+        var text = Path.Combine(legacy, "existing.txt"); File.WriteAllText(text, "keep this text");
+        var model = Path.Combine(directory.Path, "synthetic-model.bin"); File.WriteAllBytes(model, [0]);
+        JsonFiles.Write(paths.ConfigFile, new AppConfig { OutputDirectory = legacy, ModelPath = model, VadPath = model });
+        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--max-minutes", "45"]));
+        Assert.Null(paths.LoadConfig().OutputDirectory);
+        Assert.Equal("keep this text", File.ReadAllText(text));
+        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--output-dir", directory.Path]));
+        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--max-minutes", "60"]));
+        Assert.Equal(directory.Path, paths.LoadConfig().OutputDirectory);
+        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--output-dir", "default"]));
+        Assert.Null(paths.LoadConfig().OutputDirectory);
+        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--output-dir", legacy]));
+        Assert.Equal(legacy, paths.LoadConfig().OutputDirectory);
+    }
+
+    [Fact]
+    public async Task RecordingRefusesAnInstallationUnderUpdateBeforeOpeningAudio()
+    {
+        using var updateLock = new FileStream(Path.Combine(AppContext.BaseDirectory, ".update.lock"),
+            FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var directory = new TestDirectory();
+        Assert.Equal(1, await Program.Main(["start", "--state-dir", directory.Path]));
+        Assert.False(File.Exists(Path.Combine(directory.Path, "config.json")));
+        Assert.False(Directory.Exists(Path.Combine(directory.Path, "audio")));
     }
 
     [Fact]

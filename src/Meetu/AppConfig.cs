@@ -24,6 +24,7 @@ public sealed record AppConfig
 
     [JsonIgnore] public string ResolvedModelPath => ModelPath ?? Path.Combine(AppContext.BaseDirectory, "models", DefaultModelFile);
     [JsonIgnore] public string ResolvedVadPath => VadPath ?? Path.Combine(AppContext.BaseDirectory, "models", DefaultVadFile);
+    [JsonIgnore] public string ResolvedOutputDirectory => OutputDirectory ?? Path.Combine(AppContext.BaseDirectory, "transcripts");
 
     // Earlier versions saved the install folder's default models. When that copy is gone, follow the
     // app's own models folder instead of requiring a manual reset. Other model choices are kept as-is.
@@ -47,9 +48,9 @@ public sealed record AppConfig
 
     public void Validate()
     {
-        if (string.IsNullOrWhiteSpace(OutputDirectory) || !Path.IsPathFullyQualified(OutputDirectory))
+        if (string.IsNullOrWhiteSpace(ResolvedOutputDirectory) || !Path.IsPathFullyQualified(ResolvedOutputDirectory))
             throw new ArgumentException("Configure an absolute output directory with config --output-dir.");
-        LocalPath.Require(OutputDirectory);
+        LocalPath.Require(ResolvedOutputDirectory);
         LocalPath.Require(ResolvedModelPath);
         LocalPath.Require(ResolvedVadPath);
         if (!File.Exists(ResolvedModelPath))

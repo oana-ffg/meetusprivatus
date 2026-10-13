@@ -13,6 +13,16 @@ The normal worker was run with its real microphone and output-device capture on 
 
 Playback stream transitions can legitimately produce discontinuity flags even when no speech was playing during the interval. The flag alone does not quantify lost speech; gap reporting has not been suppressed. The earlier fatal capture-queue overflow did not reproduce during this work and still requires separate validation. Meeting-client, sustained target-laptop, accent, full-retention-watchdog, and network-observation gates below remain open.
 
+## Manual updater and adjacent transcripts — 2026-10-13
+
+Warnings-as-errors build/publication and all 26 behavioral checks passed. The two native speech/playback checks and separate baseline CPU check passed. The console cancellation check initially exposed an existing minimal configuration that did not materialize implicit defaults; startup now saves the validated defaults, and the corrected console check passed. Default-output checks cover the adjacent transcripts folder, migration of the previous standard destination, preservation of old text/custom choices, and an explicit return to default.
+
+The actual updater passed isolated offline checks with a fresh published executable, verified models, and synthetic user files: installation-lease exclusion, bad checksum and archive-traversal rejection, unrelated-file collision preservation, persistent file-replacement failure, recording exclusion during a pending transaction, rollback/retry, committed-transaction cleanup, obsolete owned-file removal, per-file integrity, and transcript preservation. These checks opened no microphone and made no network requests.
+
+One earlier replacement run returned Windows ERROR_UNABLE_TO_REMOVE_REPLACED after rollback; the previous package was restored and a subsequent independent update succeeded. The holder/cause was not identified. Replacement now reports the file/HRESULT and waits at most 1.8 seconds only for sharing/lock errors and the Windows error that preserves both original names; persistent contention still fails and rolls back. Both persistent failure/recovery and the final complete updater check passed.
+
+The recording app remains separate from the manually invoked downloader. These checks do not establish full-worker network-observation, power-loss recovery, meeting-client, target-laptop, or fatal capture-queue acceptance.
+
 ## Initial validation — 2026-10-10
 
 The manual-start prototype builds and publishes successfully with warnings treated as errors. Seventeen distinct tests pass with native checks explicitly enabled: fourteen behavioral/control checks, two native pipeline checks, and one baseline CPU check in a fresh process. The ordinary build intentionally skips the three native tests. The separate console check verifies real Windows Ctrl+C delivery during startup without opening a microphone.

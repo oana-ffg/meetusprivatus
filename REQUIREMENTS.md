@@ -1,6 +1,6 @@
 # Meetus Privatus — Requirements
 
-Status: confirmed product requirements and initial implementation defaults, updated 2026-10-10. SPEC.md describes the prototype. Live acceptance and quantitative resource budgets remain unverified.
+Status: confirmed product requirements and implementation defaults, updated 2026-10-13. SPEC.md describes the prototype. Live acceptance and quantitative resource budgets remain unverified.
 
 ## Purpose
 
@@ -17,6 +17,7 @@ Produce useful text that jogs the user's memory about meeting discussions and in
 - Incremental transcription during meetings is preferred; do not display live text.
 - Minimal effort for normal use: double-click Start.cmd, Ctrl+C to stop early, no typed startup/shutdown commands or app selection. A small status console is acceptable; no live transcript display. Default local output works without configuration.
 - Manual startup is sufficient. Automatic meeting detection/start is an optional bonus. No Windows sign-in startup.
+- Default transcript output is the `transcripts` folder beside the program. A double-click `Update.cmd` performs explicitly requested release downloads without browser/GitHub setup on each update, preserving transcripts and settings.
 - Auto-stop capture after one hour by default, with configurable duration. Ctrl+C and timed stop must finish queued transcription before deleting its audio, subject to the existing pending-audio retention/failure policy.
 - Open source under MIT, attributed to Meetus Privatus contributors.
 
@@ -25,6 +26,7 @@ Produce useful text that jogs the user's memory about meeting discussions and in
 - The running application makes **no external calls**, uploads, telemetry, cloud inference, automatic downloads/updates, or crash reporting.
 - Local models only. No cloud meeting integrations, bots, calendars, or automatic meeting joining.
 - A separately invoked model-download script is explicitly approved; offline import must work. Setup/build networking never authorizes disclosure of meeting content or application networking.
+- A separately invoked release updater is explicitly approved. It may fetch public release metadata, archives, and checksums; it must never read or upload meeting content. Support verified offline update import too. No automatic invocation from the recording app.
 - No durable audio recordings. Short temporary clips are allowed and must be deleted promptly after transcript commit.
 - Allow up to **one hour of pending audio**, bounded across both sources by age and bytes; never retain processed audio for the entire allowance unnecessarily.
 - Confirmed overload behavior: stop capture, preserve completed text, mark gaps, and delete audio before expiry. Do not silently extend retention or auto-restart.
@@ -47,7 +49,7 @@ The implementation request authorizes ordinary choices needed to make the manual
 - Timestamped UTF-8 local.txt and remote.txt in unique session directories, with canonical text records for idempotent recovery.
 - Retain text until manual deletion. No automatic text purge, invented titles, or speaker identities.
 - Content-free inspectable errors, without notification pop-ups or live display.
-- First run saves the default local transcript destination under the private state directory. Optional CLI or settings-file edits configure future sessions. Recording duration accepts 1–1440 minutes; default 60.
+- First run saves defaults; an unset transcript destination resolves beside the executable without pinning its install location. The previous standard AppData destination migrates for future sessions; preserve old text and explicit custom destinations. Optional CLI or settings-file edits configure future sessions. Recording duration accepts 1–1440 minutes; default 60.
 
 These are implementation decisions, not separately answered product choices or measured accuracy/performance claims. Desired completion delay and CPU/memory/responsiveness budgets remain to be agreed from live measurements.
 
