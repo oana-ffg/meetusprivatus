@@ -19,7 +19,7 @@ public static class Program
             {
                 case "config":
                     RequireOptions(options, "state-dir", "output-dir", "model", "vad", "mic", "playback", "threads", "clip-seconds", "max-minutes");
-                    var config = paths.LoadConfig().WithMissingDefaultModelsUnpinned();
+                    var config = paths.LoadConfig();
                     config = WithDefaultOutput(paths, config with
                     {
                         OutputDirectory = AbsoluteOption(options, "output-dir", config.OutputDirectory),
@@ -31,6 +31,7 @@ public static class Program
                         ClipSeconds = IntOption(options, "clip-seconds", config.ClipSeconds),
                         MaxSessionMinutes = IntOption(options, "max-minutes", config.MaxSessionMinutes)
                     });
+                    config = config.WithMissingDefaultModelsUnpinned();
                     if (options.Keys.Any(key => key != "state-dir")) { config.Validate(); JsonFiles.Write(paths.ConfigFile, config); }
                     Console.WriteLine(JsonSerializer.Serialize(config, JsonFiles.Options)); return 0;
                 case "devices":

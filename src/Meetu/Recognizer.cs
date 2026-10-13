@@ -5,7 +5,12 @@ using System.Runtime.Intrinsics.X86;
 
 namespace Meetu;
 
-public sealed class Recognizer : IAsyncDisposable
+internal interface IClipRecognizer : IAsyncDisposable
+{
+    Task<TranscriptRecord> TranscribeAsync(AudioClip clip, CancellationToken cancellationToken);
+}
+
+public sealed class Recognizer : IClipRecognizer
 {
     private readonly WhisperFactory factory;
     private readonly WhisperProcessor processor;

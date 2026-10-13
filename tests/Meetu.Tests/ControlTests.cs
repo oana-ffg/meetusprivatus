@@ -122,6 +122,57 @@ public sealed class ControlTests
     }
 
     [Fact]
+    public async Task UnavailableLegacyDriveIsResetWithoutAccessingItsFiles()
+    {
+        using var directory = new TestDirectory();
+        var root = Enumerable.Range('D', 'Z' - 'D' + 1).Select(letter => $"{(char)letter}:\\")
+            .First(path => new DriveInfo(path).DriveType is DriveType.Unknown or DriveType.NoRootDirectory);
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        var saved = new AppConfig
+        {
+            ModelPath = Path.Combine(root, "old-install", "models", "ggml-base.en-q5_1.bin"),
+            VadPath = Path.Combine(root, "old-install", "models", "ggml-silero-v5.1.2.bin")
+        };
+        var migrated = saved.WithMissingDefaultModelsUnpinned();
+        Assert.Null(migrated.ModelPath); Assert.Null(migrated.VadPath);
+        JsonFiles.Write(paths.ConfigFile, saved);
+        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root]));
+        var custom = Path.Combine(root, "chosen", "ggml-base.en.bin");
+        Assert.Equal(custom, (saved with { ModelPath = custom }).WithMissingDefaultModelsUnpinned().ModelPath);
+        Assert.Throws<ArgumentException>(() => (saved with
+        { ModelPath = @"\\network.invalid\models\ggml-base.en-q5_1.bin" }).WithMissingDefaultModelsUnpinned());
+    }
+
+    [Fact]
+    public async Task ExplicitModelOverridesAreAppliedBeforeLegacyPathValidation()
+    {
+        using var directory = new TestDirectory();
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        var model = Path.Combine(directory.Path, "synthetic-model.bin"); File.WriteAllBytes(model, [0]);
+        JsonFiles.Write(paths.ConfigFile, new AppConfig
+        {
+            ModelPath = @"\\network.invalid\models\ggml-base.en-q5_1.bin",
+            VadPath = @"\\network.invalid\models\ggml-silero-v5.1.2.bin"
+        });
+        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--model", model, "--vad", model]));
+        Assert.Equal(model, paths.LoadConfig().ModelPath); Assert.Equal(model, paths.LoadConfig().VadPath);
+        // A default override must reach bundled-model validation, even with an invalid saved path.
+        var config = paths.LoadConfig() with { ModelPath = @"\\network.invalid\models\ggml-base.en-q5_1.bin" };
+        JsonFiles.Write(paths.ConfigFile, config);
+        using var errors = new StringWriter();
+        var previous = Console.Error;
+        try
+        {
+            Console.SetError(errors);
+            var result = await Program.Main(["config", "--state-dir", paths.Root, "--model", "default"]);
+            Assert.DoesNotContain("network", errors.ToString(), StringComparison.OrdinalIgnoreCase);
+            if (File.Exists(new AppConfig().ResolvedModelPath)) Assert.Equal(0, result);
+            else Assert.Contains("Whisper model missing", errors.ToString());
+        }
+        finally { Console.SetError(previous); }
+    }
+
+    [Fact]
     public async Task RemovedProcessOptionsFailBeforeStartingCapture()
     {
         using var directory = new TestDirectory();

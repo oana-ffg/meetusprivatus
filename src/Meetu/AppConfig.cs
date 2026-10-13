@@ -36,6 +36,11 @@ public sealed record AppConfig
     private static string? Unpinned(string? path, string defaultFile)
     {
         if (path is null || !Path.GetFileName(path).Equals(defaultFile, StringComparison.OrdinalIgnoreCase)) return path;
+        // An old local install can be on a drive that is no longer mounted. Inspect only
+        // its drive type before resetting it; never follow a network or linked path.
+        if (Path.IsPathFullyQualified(path) && !path.StartsWith(@"\\", StringComparison.Ordinal) &&
+            new DriveInfo(Path.GetPathRoot(path)!).DriveType is DriveType.Unknown or DriveType.NoRootDirectory)
+            return null;
         LocalPath.Require(path);
         return File.Exists(path) ? path : null;
     }
