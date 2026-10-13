@@ -1,3 +1,5 @@
+using System.IO.Pipes;
+using System.Text;
 using Meetu;
 using Xunit;
 
@@ -5,6 +7,31 @@ namespace Meetu.Tests;
 
 public sealed class ControlTests
 {
+    [Theory]
+    [InlineData("")]
+    [InlineData("{\"state\":")]
+    public async Task WorkerDisconnectDuringStatusReplyReturnsUnavailable(string reply)
+    {
+        using var directory = new TestDirectory();
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        async Task ReplyAndDisconnectAsync()
+        {
+            await using var pipe = new NamedPipeServerStream(paths.PipeName, PipeDirection.InOut, 1,
+                PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            var command = new byte[1];
+            Assert.Equal(1, await pipe.ReadAsync(command, timeout.Token));
+            Assert.Equal(0, command[0]);
+            await pipe.WriteAsync(Encoding.UTF8.GetBytes(reply), timeout.Token);
+            await pipe.FlushAsync(timeout.Token);
+        }
+        var server = ReplyAndDisconnectAsync();
+        try { Assert.Null(await ControlServer.RequestAsync(paths)); }
+        finally { await server; }
+        Assert.False(Directory.Exists(paths.AudioRoot));
+    }
+
     [Fact]
     public async Task CurrentUserPipeReturnsStatusAndAcknowledgesStopWithoutAudioCapture()
     {
