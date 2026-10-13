@@ -5,7 +5,12 @@ using System.Runtime.Intrinsics.X86;
 
 namespace Meetu;
 
-public sealed class Recognizer : IAsyncDisposable
+internal interface IClipRecognizer : IAsyncDisposable
+{
+    Task<TranscriptRecord> TranscribeAsync(AudioClip clip, CancellationToken cancellationToken);
+}
+
+public sealed class Recognizer : IClipRecognizer
 {
     private readonly WhisperFactory factory;
     private readonly WhisperProcessor processor;
@@ -17,12 +22,12 @@ public sealed class Recognizer : IAsyncDisposable
         var optimizedCpu = Avx.IsSupported && Avx2.IsSupported && Fma.IsSupported &&
             (X86Base.CpuId(1, 0).Ecx & (1 << 29)) != 0; // F16C
         RuntimeOptions.RuntimeLibraryOrder = optimizedCpu ? [RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx] : [RuntimeLibrary.CpuNoAvx];
-        factory = WhisperFactory.FromPath(config.ModelPath, new WhisperFactoryOptions { UseGpu = false });
+        factory = WhisperFactory.FromPath(config.ResolvedModelPath, new WhisperFactoryOptions { UseGpu = false });
         try
         {
             processor = factory.CreateBuilder().WithLanguage("en").WithThreads(config.Threads)
                 .WithNoContext().WithTemperature(0).WithTemperatureInc(0).WithGreedySamplingStrategy().Build();
-            vadFactory = WhisperVadFactory.FromPath(config.VadPath, new WhisperFactoryOptions { UseGpu = false });
+            vadFactory = WhisperVadFactory.FromPath(config.ResolvedVadPath, new WhisperFactoryOptions { UseGpu = false });
             vad = vadFactory.CreateBuilder().WithUseGpu(false).WithThreads(1)
                 .WithMinSpeechDuration(TimeSpan.FromMilliseconds(100)).Build();
         }

@@ -20,17 +20,18 @@ public static class Program
                 case "config":
                     RequireOptions(options, "state-dir", "output-dir", "model", "vad", "mic", "playback", "threads", "clip-seconds", "max-minutes");
                     var config = paths.LoadConfig();
-                    config = config with
+                    config = WithDefaultOutput(paths, config with
                     {
                         OutputDirectory = AbsoluteOption(options, "output-dir", config.OutputDirectory),
-                        ModelPath = AbsoluteOption(options, "model", config.ModelPath)!,
-                        VadPath = AbsoluteOption(options, "vad", config.VadPath)!,
+                        ModelPath = options.TryGetValue("model", out var model) ? DefaultableAbsolute(model) : config.ModelPath,
+                        VadPath = options.TryGetValue("vad", out var vad) ? DefaultableAbsolute(vad) : config.VadPath,
                         MicrophoneId = options.TryGetValue("mic", out var mic) ? (mic == "default" ? null : mic) : config.MicrophoneId,
                         PlaybackId = options.TryGetValue("playback", out var playback) ? (playback == "default" ? null : playback) : config.PlaybackId,
                         Threads = IntOption(options, "threads", config.Threads),
                         ClipSeconds = IntOption(options, "clip-seconds", config.ClipSeconds),
                         MaxSessionMinutes = IntOption(options, "max-minutes", config.MaxSessionMinutes)
-                    };
+                    });
+                    config = config.WithMissingDefaultModelsUnpinned();
                     if (options.Keys.Any(key => key != "state-dir")) { config.Validate(); JsonFiles.Write(paths.ConfigFile, config); }
                     Console.WriteLine(JsonSerializer.Serialize(config, JsonFiles.Options)); return 0;
                 case "devices":
@@ -74,7 +75,8 @@ public static class Program
                     LocalPath.Require(sessionDirectory);
                     if (!File.Exists(Path.Combine(sessionDirectory, "session.json")) || !Directory.Exists(Path.Combine(sessionDirectory, "segments")))
                         throw new ArgumentException("This is not a recognizable meeting transcript directory.");
-                    new TranscriptStore(sessionDirectory).Render();
+                    // A live worker may still commit to this session; never overwrite its text views.
+                    using (AcquireWorkerLock(paths)) new TranscriptStore(sessionDirectory).Render();
                     Console.WriteLine("Text files rebuilt from committed segment records."); return 0;
                 default: throw new ArgumentException("Unknown command. Use meetus help.");
             }
@@ -90,26 +92,34 @@ public static class Program
 
     private static void PrepareConfig(StatePaths paths)
     {
-        var config = paths.LoadConfig();
-        if (config.OutputDirectory is null)
-        {
-            config = config with { OutputDirectory = Path.Combine(paths.Root, "transcripts") };
-            config.Validate();
-            JsonFiles.Write(paths.ConfigFile, config);
-        }
-        else config.Validate();
+        var saved = paths.LoadConfig();
+        var config = WithDefaultOutput(paths, saved.WithMissingDefaultModelsUnpinned());
+        config.Validate();
+        if (config != saved) JsonFiles.Write(paths.ConfigFile, config);
+    }
+
+    // First use saves the private transcripts folder, whether it starts with run, start, or config.
+    private static AppConfig WithDefaultOutput(StatePaths paths, AppConfig config) =>
+        config.OutputDirectory is null ? config with { OutputDirectory = Path.Combine(paths.Root, "transcripts") } : config;
+
+    // The worker holds this exclusive handle for its lifetime; cleanup and repair take it briefly.
+    private static FileStream AcquireWorkerLock(StatePaths paths)
+    {
+        try { return new FileStream(Path.Combine(paths.Root, "worker.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+        catch (IOException exception) when (exception.HResult == unchecked((int)0x80070020)) // ERROR_SHARING_VIOLATION
+        { throw new InvalidOperationException("A recording is still running or finishing. Wait for it to complete, then retry."); }
     }
 
     private static void Cleanup(StatePaths paths)
     {
-        using var workerLock = new FileStream(Path.Combine(paths.Root, "worker.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var workerLock = AcquireWorkerLock(paths);
         ClipWorkspace.CleanupAbandoned(paths.AudioRoot);
     }
 
     private static async Task<int> RunWorkerAsync(StatePaths paths, bool interactive = false)
     {
         // The handle is held for the worker lifetime, including cleanup and model disposal.
-        using var workerLock = new FileStream(Path.Combine(paths.Root, "worker.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var workerLock = AcquireWorkerLock(paths);
         using var process = Process.GetCurrentProcess();
         process.PriorityClass = ProcessPriorityClass.BelowNormal;
         void ShowStatus(SessionStatus status)
@@ -118,12 +128,13 @@ public static class Program
             if (status.State == "Capturing") Console.WriteLine("Recording microphone and output. Press Ctrl+C to stop.");
             else if (status.State == "Finishing") Console.WriteLine("Capture stopped. Finishing pending text and deleting temporary audio...");
         }
-        var session = new CaptureSession(paths.LoadConfig(), paths, ShowStatus);
+        var config = paths.LoadConfig();
+        var session = new CaptureSession(config, paths, ShowStatus);
         ConsoleCancelEventHandler onCancel = (_, eventArgs) => { eventArgs.Cancel = true; session.Stop(); };
         if (interactive)
         {
             Console.CancelKeyPress += onCancel;
-            Console.WriteLine($"Starting local transcription. Auto-stop after {paths.LoadConfig().MaxSessionMinutes} minutes; Ctrl+C stops earlier.");
+            Console.WriteLine($"Starting local transcription. Auto-stop after {config.MaxSessionMinutes} minutes; Ctrl+C stops earlier.");
         }
         using var cancellation = new CancellationTokenSource();
         var controls = ControlServer.RunAsync(paths, session, cancellation.Token);
@@ -136,7 +147,7 @@ public static class Program
         if (interactive)
         {
             Console.WriteLine(session.Status.State == "Complete"
-                ? $"Finished. Transcripts: {session.Status.SessionDirectory ?? paths.LoadConfig().OutputDirectory}"
+                ? $"Finished. Transcripts: {session.Status.SessionDirectory ?? config.OutputDirectory}"
                 : session.Status.Error);
             if (session.Status.State != "Complete" && !Console.IsInputRedirected)
             { Console.WriteLine("Press any key to close."); Console.ReadKey(intercept: true); }
@@ -185,11 +196,12 @@ public static class Program
     private static int IntOption(Dictionary<string, string> options, string key, int fallback) => options.TryGetValue(key, out var value)
         ? int.Parse(value, System.Globalization.CultureInfo.InvariantCulture) : fallback;
     private static string? AbsoluteOption(Dictionary<string, string> options, string key, string? fallback) => options.TryGetValue(key, out var value) ? Path.GetFullPath(value) : fallback;
+    private static string? DefaultableAbsolute(string value) => value == "default" ? null : Path.GetFullPath(value);
 
     private static void PrintHelp() => Console.WriteLine("""
         Meetus Privatus — private, CPU-only meeting transcripts
 
-        config [--output-dir PATH] [--model FILE] [--vad FILE] [--mic ID|default] [--playback ID|default]
+        config [--output-dir PATH] [--model FILE|default] [--vad FILE|default] [--mic ID|default] [--playback ID|default]
                [--threads 1|2] [--clip-seconds 5..30] [--max-minutes 1..1440]
         config                     Show saved configuration
         devices                    List input and output device IDs

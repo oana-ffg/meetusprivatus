@@ -70,6 +70,109 @@ public sealed class ControlTests
     }
 
     [Fact]
+    public async Task FirstConfigurationSavesDefaultOutputWithoutPinningTheInstallLocation()
+    {
+        using var directory = new TestDirectory();
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        var model = Path.Combine(directory.Path, "invalid-model-fixture.bin"); File.WriteAllBytes(model, [0]);
+        // Device setup can precede the first recording; it must not require choosing an output directory.
+        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--model", model, "--vad", model, "--mic", "configured-input"]));
+        var saved = paths.LoadConfig();
+        Assert.Equal(Path.Combine(paths.Root, "transcripts"), saved.OutputDirectory);
+        Assert.Equal("configured-input", saved.MicrophoneId);
+        // Unset model paths stay unset in saved settings, so a moved or upgraded app finds its own models.
+        var defaults = new AppConfig { OutputDirectory = saved.OutputDirectory };
+        Assert.Equal(Path.Combine(AppContext.BaseDirectory, "models", "ggml-base.en-q5_1.bin"), defaults.ResolvedModelPath);
+        Assert.Equal(Path.Combine(AppContext.BaseDirectory, "models", "ggml-silero-v5.1.2.bin"), defaults.ResolvedVadPath);
+        var json = System.Text.Json.JsonSerializer.Serialize(defaults, JsonFiles.Options);
+        Assert.DoesNotContain("ggml", json);
+        Assert.Null(System.Text.Json.JsonSerializer.Deserialize<AppConfig>(json, JsonFiles.Options)!.ModelPath);
+    }
+
+    [Fact]
+    public async Task RepairRefusesASessionWhileAWorkerHoldsTheLock()
+    {
+        using var directory = new TestDirectory();
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        var store = new TranscriptStore(Path.Combine(directory.Path, "session"));
+        File.WriteAllText(Path.Combine(store.DirectoryPath, "session.json"), "{}");
+        var local = Path.Combine(store.DirectoryPath, "local.txt");
+        File.WriteAllText(local, "text a live worker is still writing");
+        using (new FileStream(Path.Combine(paths.Root, "worker.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            Assert.Equal(1, await Program.Main(["repair", "--state-dir", paths.Root, "--session-dir", store.DirectoryPath]));
+        Assert.Equal("text a live worker is still writing", File.ReadAllText(local));
+        Assert.Equal(0, await Program.Main(["repair", "--state-dir", paths.Root, "--session-dir", store.DirectoryPath]));
+        Assert.Contains("Microphone speech", File.ReadAllText(local));
+    }
+
+    [Fact]
+    public void MissingPinnedDefaultModelsFollowTheAppButOtherChoicesAreKept()
+    {
+        using var directory = new TestDirectory();
+        var present = Path.Combine(directory.Path, "kept", "ggml-base.en-q5_1.bin");
+        Directory.CreateDirectory(Path.GetDirectoryName(present)!); File.WriteAllBytes(present, [0]);
+        var movedInstall = Path.Combine(directory.Path, "old-install", "models");
+        var custom = Path.Combine(directory.Path, "missing", "ggml-base.en.bin");
+        var unpinned = new AppConfig { ModelPath = Path.Combine(movedInstall, "ggml-base.en-q5_1.bin"),
+            VadPath = Path.Combine(movedInstall, "ggml-silero-v5.1.2.bin") }.WithMissingDefaultModelsUnpinned();
+        Assert.Null(unpinned.ModelPath); Assert.Null(unpinned.VadPath);
+        Assert.Equal(present, new AppConfig { ModelPath = present }.WithMissingDefaultModelsUnpinned().ModelPath);
+        // A different model the user chose is never silently replaced; validation reports it instead.
+        Assert.Equal(custom, new AppConfig { ModelPath = custom }.WithMissingDefaultModelsUnpinned().ModelPath);
+    }
+
+    [Fact]
+    public async Task UnavailableLegacyDriveIsResetWithoutAccessingItsFiles()
+    {
+        using var directory = new TestDirectory();
+        var root = Enumerable.Range('D', 'Z' - 'D' + 1).Select(letter => $"{(char)letter}:\\")
+            .First(path => new DriveInfo(path).DriveType is DriveType.Unknown or DriveType.NoRootDirectory);
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        var saved = new AppConfig
+        {
+            ModelPath = Path.Combine(root, "old-install", "models", "ggml-base.en-q5_1.bin"),
+            VadPath = Path.Combine(root, "old-install", "models", "ggml-silero-v5.1.2.bin")
+        };
+        var migrated = saved.WithMissingDefaultModelsUnpinned();
+        Assert.Null(migrated.ModelPath); Assert.Null(migrated.VadPath);
+        JsonFiles.Write(paths.ConfigFile, saved);
+        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root]));
+        var custom = Path.Combine(root, "chosen", "ggml-base.en.bin");
+        Assert.Equal(custom, (saved with { ModelPath = custom }).WithMissingDefaultModelsUnpinned().ModelPath);
+        Assert.Throws<ArgumentException>(() => (saved with
+        { ModelPath = @"\\network.invalid\models\ggml-base.en-q5_1.bin" }).WithMissingDefaultModelsUnpinned());
+    }
+
+    [Fact]
+    public async Task ExplicitModelOverridesAreAppliedBeforeLegacyPathValidation()
+    {
+        using var directory = new TestDirectory();
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        var model = Path.Combine(directory.Path, "synthetic-model.bin"); File.WriteAllBytes(model, [0]);
+        JsonFiles.Write(paths.ConfigFile, new AppConfig
+        {
+            ModelPath = @"\\network.invalid\models\ggml-base.en-q5_1.bin",
+            VadPath = @"\\network.invalid\models\ggml-silero-v5.1.2.bin"
+        });
+        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--model", model, "--vad", model]));
+        Assert.Equal(model, paths.LoadConfig().ModelPath); Assert.Equal(model, paths.LoadConfig().VadPath);
+        // A default override must reach bundled-model validation, even with an invalid saved path.
+        var config = paths.LoadConfig() with { ModelPath = @"\\network.invalid\models\ggml-base.en-q5_1.bin" };
+        JsonFiles.Write(paths.ConfigFile, config);
+        using var errors = new StringWriter();
+        var previous = Console.Error;
+        try
+        {
+            Console.SetError(errors);
+            var result = await Program.Main(["config", "--state-dir", paths.Root, "--model", "default"]);
+            Assert.DoesNotContain("network", errors.ToString(), StringComparison.OrdinalIgnoreCase);
+            if (File.Exists(new AppConfig().ResolvedModelPath)) Assert.Equal(0, result);
+            else Assert.Contains("Whisper model missing", errors.ToString());
+        }
+        finally { Console.SetError(previous); }
+    }
+
+    [Fact]
     public async Task RemovedProcessOptionsFailBeforeStartingCapture()
     {
         using var directory = new TestDirectory();

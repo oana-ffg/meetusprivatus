@@ -102,12 +102,14 @@ public sealed class PipelineTests
         var first = new TranscriptRecord(id, AudioSource.Local, 65, 68, [new(65, 68, "Remember\nthe next step.")]);
         store.Commit(first);
         store.Commit(first with { Segments = [new(65, 68, "Duplicate retry must not replace committed text.")] });
+        store.Commit(new TranscriptRecord(Guid.NewGuid().ToString("N"), AudioSource.Remote, 66, 69, [new(66, 69, "Overlapping playback.")]));
         File.WriteAllText(System.IO.Path.Combine(store.DirectoryPath, "local.txt"), "interrupted export");
         new TranscriptStore(store.DirectoryPath).Render();
         var text = File.ReadAllText(System.IO.Path.Combine(store.DirectoryPath, "local.txt"));
+        Assert.Contains("[00:01:06–00:01:09] Overlapping playback.", File.ReadAllText(System.IO.Path.Combine(store.DirectoryPath, "remote.txt")));
         Assert.Contains("[00:01:05–00:01:08] Remember the next step.", text);
         Assert.DoesNotContain("Duplicate", text);
-        Assert.Single(Directory.GetFiles(System.IO.Path.Combine(store.DirectoryPath, "segments"), "*.json"));
+        Assert.Equal(2, Directory.GetFiles(System.IO.Path.Combine(store.DirectoryPath, "segments"), "*.json").Length);
         Assert.Contains("notes spoken while muted", text);
         Assert.DoesNotContain("Remember", File.ReadAllText(System.IO.Path.Combine(store.DirectoryPath, "remote.txt")));
     }

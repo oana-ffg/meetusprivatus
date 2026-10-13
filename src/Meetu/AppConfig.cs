@@ -3,31 +3,59 @@ using System.Security.Principal;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Meetu;
 
 public sealed record AppConfig
 {
     public string? OutputDirectory { get; init; }
-    public string ModelPath { get; init; } = Path.Combine(AppContext.BaseDirectory, "models", "ggml-base.en-q5_1.bin");
-    public string VadPath { get; init; } = Path.Combine(AppContext.BaseDirectory, "models", "ggml-silero-v5.1.2.bin");
+    // Null selects the models folder beside the executable, so saved settings survive moving or upgrading the app.
+    public string? ModelPath { get; init; }
+    public string? VadPath { get; init; }
     public string? MicrophoneId { get; init; }
     public string? PlaybackId { get; init; }
     public int Threads { get; init; } = 1;
     public int ClipSeconds { get; init; } = 20;
     public int MaxSessionMinutes { get; init; } = 60;
 
+    private const string DefaultModelFile = "ggml-base.en-q5_1.bin";
+    private const string DefaultVadFile = "ggml-silero-v5.1.2.bin";
+
+    [JsonIgnore] public string ResolvedModelPath => ModelPath ?? Path.Combine(AppContext.BaseDirectory, "models", DefaultModelFile);
+    [JsonIgnore] public string ResolvedVadPath => VadPath ?? Path.Combine(AppContext.BaseDirectory, "models", DefaultVadFile);
+
+    // Earlier versions saved the install folder's default models. When that copy is gone, follow the
+    // app's own models folder instead of requiring a manual reset. Other model choices are kept as-is.
+    public AppConfig WithMissingDefaultModelsUnpinned() => this with
+    {
+        ModelPath = Unpinned(ModelPath, DefaultModelFile),
+        VadPath = Unpinned(VadPath, DefaultVadFile)
+    };
+
+    private static string? Unpinned(string? path, string defaultFile)
+    {
+        if (path is null || !Path.GetFileName(path).Equals(defaultFile, StringComparison.OrdinalIgnoreCase)) return path;
+        // An old local install can be on a drive that is no longer mounted. Inspect only
+        // its drive type before resetting it; never follow a network or linked path.
+        if (Path.IsPathFullyQualified(path) && !path.StartsWith(@"\\", StringComparison.Ordinal) &&
+            new DriveInfo(Path.GetPathRoot(path)!).DriveType is DriveType.Unknown or DriveType.NoRootDirectory)
+            return null;
+        LocalPath.Require(path);
+        return File.Exists(path) ? path : null;
+    }
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(OutputDirectory) || !Path.IsPathFullyQualified(OutputDirectory))
             throw new ArgumentException("Configure an absolute output directory with config --output-dir.");
         LocalPath.Require(OutputDirectory);
-        LocalPath.Require(ModelPath);
-        LocalPath.Require(VadPath);
-        if (!Path.IsPathFullyQualified(ModelPath) || !File.Exists(ModelPath))
-            throw new ArgumentException("Whisper model missing. Run the setup download script, then configure --model.");
-        if (!Path.IsPathFullyQualified(VadPath) || !File.Exists(VadPath))
-            throw new ArgumentException("Speech detector missing. Run the setup download script, then configure --vad.");
+        LocalPath.Require(ResolvedModelPath);
+        LocalPath.Require(ResolvedVadPath);
+        if (!File.Exists(ResolvedModelPath))
+            throw new ArgumentException("Whisper model missing. Restore the models folder beside meetus.exe (config --model default) or configure --model FILE.");
+        if (!File.Exists(ResolvedVadPath))
+            throw new ArgumentException("Speech detector missing. Restore the models folder beside meetus.exe (config --vad default) or configure --vad FILE.");
         if (Threads is < 1 or > 2) throw new ArgumentException("Recognition threads must be 1 or 2.");
         if (ClipSeconds is < 5 or > 30) throw new ArgumentException("Clip length must be 5 to 30 seconds.");
         if (MaxSessionMinutes is < 1 or > 1440) throw new ArgumentException("Maximum recording duration must be 1 to 1440 minutes.");

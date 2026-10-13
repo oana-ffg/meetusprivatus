@@ -1,7 +1,7 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Threading.Channels;
 using NAudio.CoreAudioApi;
-using NAudio.Wave;
 
 namespace Meetu;
 
@@ -13,6 +13,8 @@ public sealed class CaptureSession
     private readonly AppConfig config;
     private readonly StatePaths paths;
     private readonly Action<SessionStatus>? statusChanged;
+    private readonly Func<AppConfig, ISessionAudioCapture> openCapture;
+    private readonly Func<AppConfig, IClipRecognizer> openRecognizer;
     private readonly TaskCompletionSource stop = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource<string> fault = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly PendingBudget budget = new();
@@ -28,8 +30,13 @@ public sealed class CaptureSession
     public void Stop() => stop.TrySetResult();
 
     public CaptureSession(AppConfig config, StatePaths paths, Action<SessionStatus>? statusChanged = null)
+        : this(config, paths, c => new SessionAudioCapture(c), c => new Recognizer(c), statusChanged) { }
+
+    internal CaptureSession(AppConfig config, StatePaths paths, Func<AppConfig, ISessionAudioCapture> openCapture,
+        Func<AppConfig, IClipRecognizer> openRecognizer, Action<SessionStatus>? statusChanged = null)
     {
         this.config = config; this.paths = paths; this.statusChanged = statusChanged;
+        this.openCapture = openCapture; this.openRecognizer = openRecognizer;
     }
 
     public async Task RunAsync()
@@ -49,26 +56,21 @@ public sealed class CaptureSession
         Task? recognitionTask = null;
         Task? monitorTask = null;
         ClipWorkspace? workspace = null;
-        Recognizer? recognizer = null;
-        WasapiRecorder? local = null;
-        WasapiRecorder? remote = null;
+        IClipRecognizer? recognizer = null;
+        ISessionAudioCapture? capture = null;
         try
         {
             if (stop.Task.IsCompleted) { Update(new SessionStatus("Complete")); return; }
             config.Validate();
             workspace = new ClipWorkspace(paths.AudioRoot, sessionId);
-            recognizer = new Recognizer(config);
+            recognizer = openRecognizer(config);
             if (stop.Task.IsCompleted) { Update(new SessionStatus("Complete")); return; }
-            using var enumerator = new MMDeviceEnumerator();
-            using var microphone = AudioDevices.OpenMicrophone(enumerator, config.MicrophoneId);
-            using var playback = AudioDevices.OpenPlayback(enumerator, config.PlaybackId);
-            local = AudioDevices.CreateMicrophoneRecorder(microphone);
-            remote = AudioDevices.CreatePlaybackRecorder(playback);
-            var directory = Path.Combine(config.OutputDirectory!, DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + sessionId);
+            capture = openCapture(config);
+            var directory = Path.Combine(config.OutputDirectory!, DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + sessionId);
             transcripts = new TranscriptStore(directory);
             startedUtc = DateTimeOffset.UtcNow;
             JsonFiles.Write(Path.Combine(directory, "session.json"), new
-            { StartedUtc = startedUtc, State = "Capturing", MicrophoneId = microphone.ID, PlaybackId = playback.ID });
+            { StartedUtc = startedUtc, State = "Capturing", capture.MicrophoneId, capture.PlaybackId });
             var startedTimestamp = Stopwatch.GetTimestamp();
             var localClock = new CaptureTimeline(startedTimestamp, 100);
             var remoteClock = new CaptureTimeline(startedTimestamp, 100);
@@ -88,25 +90,18 @@ public sealed class CaptureSession
                     discontinuity, timing.CapturedTimestamp)))
                     fault.TrySetResult("Audio capture queue filled. Capture stopped to protect meeting responsiveness.");
             }
-            local.DataAvailable += (buffer, flags, _, qpc) => Receive(AudioSource.Local, buffer, flags, qpc);
-            remote.DataAvailable += (buffer, flags, _, qpc) => Receive(AudioSource.Remote, buffer, flags, qpc);
-            local.RecordingStopped += (_, args) => { if (args.Exception is not null) fault.TrySetResult("Microphone capture failed. Check the selected device."); };
-            remote.RecordingStopped += (_, args) => { if (args.Exception is not null) fault.TrySetResult("Output capture failed. Check the selected playback device."); };
-
             assembleTask = AssembleAsync(packets.Reader, clips.Writer, workspace.DirectoryPath, transcripts);
             recognitionTask = RecognizeAsync(clips.Reader, recognizer, transcripts, cancelInference.Token);
-            monitorTask = MonitorAsync(microphone, playback, workspace, cancelMonitor.Token);
+            monitorTask = MonitorAsync(capture, workspace, cancelMonitor.Token);
             using var captureDeadline = new CancellationTokenSource(TimeSpan.FromMinutes(config.MaxSessionMinutes));
             using var deadlineRegistration = captureDeadline.Token.Register(Stop);
-            local.StartRecording(); remote.StartRecording();
+            capture.Start(Receive, error => fault.TrySetResult(error));
             Update(new SessionStatus("Capturing", directory));
             await Task.WhenAny(stop.Task, fault.Task);
+            Stop();
             captureSeconds = sessionClock.Elapsed.TotalSeconds;
             Update(Status with { State = "Finishing", Error = fault.Task.IsCompleted ? await fault.Task : null });
-            local.StopRecording(); remote.StopRecording();
-            // DisposeAsync joins the capture threads before completing the channel.
-            await local.DisposeAsync(); local = null;
-            await remote.DisposeAsync(); remote = null;
+            await capture.StopAsync();
             packets.Writer.TryComplete();
             await assembleTask;
             await recognitionTask;
@@ -121,7 +116,7 @@ public sealed class CaptureSession
             }
             Update(Status with { State = error is null ? "Complete" : "Failed", Error = error });
             JsonFiles.Write(Path.Combine(directory, "session.json"), new
-            { StartedUtc = startedUtc, MicrophoneId = microphone.ID, PlaybackId = playback.ID,
+            { StartedUtc = startedUtc, capture.MicrophoneId, capture.PlaybackId,
                 EstimatedMicrophoneTiming = localClock.UsedEstimatedTiming, EstimatedPlaybackTiming = remoteClock.UsedEstimatedTiming,
                 State = status.State, EndedUtc = DateTimeOffset.UtcNow, CaptureSeconds = captureSeconds, Error = error });
         }
@@ -129,8 +124,7 @@ public sealed class CaptureSession
         {
             if (captureSeconds == 0) captureSeconds = sessionClock.Elapsed.TotalSeconds;
             cancelInference.Cancel(); cancelMonitor.Cancel();
-            if (local is not null) { await local.DisposeAsync(); local = null; }
-            if (remote is not null) { await remote.DisposeAsync(); remote = null; }
+            if (capture is not null) await capture.StopAsync();
             packets.Writer.TryComplete(); clips.Writer.TryComplete();
             if (assembleTask is not null) { try { await assembleTask; } catch { /* failure recorded below */ } }
             if (recognitionTask is not null) { try { await recognitionTask; } catch { /* failure recorded below */ } }
@@ -153,6 +147,8 @@ public sealed class CaptureSession
         }
         finally
         {
+            try { if (capture is not null) await capture.DisposeAsync(); }
+            catch { Volatile.Write(ref status, Status with { State = "Failed", Error = "Audio device cleanup failed; committed text is preserved." }); }
             try { if (recognizer is not null) await recognizer.DisposeAsync(); }
             catch { Volatile.Write(ref status, Status with { State = "Failed", Error = "Model cleanup failed; committed text is preserved." }); }
             try { workspace?.Dispose(); budget.Clear(); }
@@ -180,13 +176,14 @@ public sealed class CaptureSession
         }
         catch
         {
+            // Overload policy: stop capture but let already queued clips finish within their own deadlines.
+            // Unfinished partial clips are deleted with the workspace; the session is marked incomplete.
             fault.TrySetResult("Audio storage or segmentation failed. Capture stopped; transcript may be incomplete.");
-            throw;
         }
         finally { clips.TryComplete(); }
     }
 
-    private async Task RecognizeAsync(ChannelReader<AudioClip> clips, Recognizer recognizer,
+    private async Task RecognizeAsync(ChannelReader<AudioClip> clips, IClipRecognizer recognizer,
         TranscriptStore transcripts, CancellationToken cancellationToken)
     {
         await foreach (var clip in clips.ReadAllAsync())
@@ -225,14 +222,15 @@ public sealed class CaptureSession
     private static TranscriptRecord Missing(AudioClip clip, bool sessionFailure) => new(clip.Id, clip.Source,
         clip.StartSeconds, clip.EndSeconds, [], sessionFailure ? "Processing cancelled after a session failure." : "Pending audio reached its retention limit.");
 
-    private async Task MonitorAsync(MMDevice microphone, MMDevice playback, ClipWorkspace workspace, CancellationToken cancellationToken)
+    private async Task MonitorAsync(ISessionAudioCapture capture, ClipWorkspace workspace, CancellationToken cancellationToken)
     {
         try
         {
             using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
             while (await timer.WaitForNextTickAsync(cancellationToken))
             {
-                if (microphone.State != DeviceState.Active || playback.State != DeviceState.Active)
+                // After a requested stop, device changes cannot lose speech and must not mark the session failed.
+                if (!stop.Task.IsCompleted && !capture.DevicesActive)
                     fault.TrySetResult("Selected audio device is unavailable. Capture stopped without switching devices.");
                 if (budget.Snapshot(Stopwatch.GetTimestamp()).AgeSeconds >= (PendingBudget.MaximumAge - PendingBudget.ExpiryMargin).TotalSeconds)
                 {
