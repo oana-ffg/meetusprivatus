@@ -19,7 +19,7 @@ internal sealed class CaptureDiagnostics(long startedTimestamp)
         public readonly List<object> Events = new(MaximumEventsPerSource);
     }
     private readonly SourceCounters[] sources = [new(), new()];
-    private int maximumQueueDepth;
+    private long maximumQueueDepth, maximumQueueBytes;
     private int recognitionActive;
     private double maximumAssemblyMilliseconds, maximumCommitMilliseconds;
 
@@ -29,7 +29,7 @@ internal sealed class CaptureDiagnostics(long startedTimestamp)
     private static extern int GetThreadPriority(IntPtr thread);
 
     public void Received(AudioSource source, int bytes, AudioClientBufferFlags flags, long position,
-        long qpc, long arrival, int queueDepth)
+        long qpc, long arrival, int queueDepth, long queueBytes)
     {
         var counters = sources[(int)source];
         if (counters.Packets == 0)
@@ -68,11 +68,17 @@ internal sealed class CaptureDiagnostics(long startedTimestamp)
             counters.LastAudioArrival = arrival; counters.LastPosition = position; counters.LastSamples = bytes / 2;
             counters.LastGcPauseTicks = gcPause;
         }
-        // Both capture threads can update this shared high-water mark without blocking.
-        var previous = Volatile.Read(ref maximumQueueDepth);
-        while (queueDepth > previous)
+        RaiseMaximum(ref maximumQueueDepth, queueDepth);
+        RaiseMaximum(ref maximumQueueBytes, queueBytes);
+    }
+
+    // Both capture threads can update shared high-water marks without blocking.
+    private static void RaiseMaximum(ref long maximum, long value)
+    {
+        var previous = Interlocked.Read(ref maximum);
+        while (value > previous)
         {
-            var observed = Interlocked.CompareExchange(ref maximumQueueDepth, queueDepth, previous);
+            var observed = Interlocked.CompareExchange(ref maximum, value, previous);
             if (observed == previous) break;
             previous = observed;
         }
@@ -85,7 +91,7 @@ internal sealed class CaptureDiagnostics(long startedTimestamp)
     public void AssemblyCompleted(long started) => maximumAssemblyMilliseconds =
         Math.Max(maximumAssemblyMilliseconds, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
 
-    // Called under the transcript-store lock, including any time spent waiting for that lock.
+    // Called only by the recognition task, after each transcript commit.
     public void CommitCompleted(long started) => maximumCommitMilliseconds =
         Math.Max(maximumCommitMilliseconds, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
 
@@ -95,6 +101,8 @@ internal sealed class CaptureDiagnostics(long startedTimestamp)
     public object Snapshot() => new
     {
         MaximumPacketQueueDepth = maximumQueueDepth,
+        // Summed across both sources: 16 kHz mono PCM is 32,000 bytes per source-second.
+        MaximumQueuedAudioSeconds = maximumQueueBytes / 32000.0,
         MaximumAssemblyMilliseconds = maximumAssemblyMilliseconds,
         MaximumTranscriptCommitMilliseconds = maximumCommitMilliseconds,
         Sources = sources.Select((counters, index) => new

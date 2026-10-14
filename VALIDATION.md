@@ -1,5 +1,16 @@
 # Prototype validation — 2026-10-13
 
+## Capture queue overflow during a transcript stall — 2026-10-14
+
+A real worker session failed after 288.75 seconds with "Audio capture queue filled." Its content-free metadata showed simultaneous ~350 ms callback gaps and native discontinuity flags on both endpoints (GC pause 0 ms), with the packet queue already at 125–151 of 256. Assembly then spent 9,092 ms in one step, matching a 9,085 ms transcript commit: the assembler was writing the discontinuity's gap record synchronously, sharing the transcript lock with recognition, and each commit flushes two files to disk. The 256-packet queue covered only about 1.3 seconds of both sources. The cause of the multi-second disk wait and of the machine-wide callback gap was not established.
+
+- Gap records now travel through the closed-clip queue and are committed by recognition, so assembly never waits for transcript storage. The transcript lock is removed; recognition is the only writer during capture.
+- The packet queue now holds 30 seconds of audio from each source (1,920,000 bytes, at most 12,000 packets). Session metadata adds peak queued audio seconds.
+- A new synthetic session check fails on the previous code: with recognition paused, a discontinuity no longer writes a gap record, and capture continues into the next clip. A queue check verifies the byte/packet bounds.
+- Warnings-as-errors build and all 28 behavioral checks passed. The two native speech/playback checks, separate baseline CPU check, and console cancellation/cleanup check passed.
+
+A real multi-second disk stall was not reproduced, so recovery from one is verified only synthetically. Meeting-client, target-laptop, and the other gates below remain open.
+
 ## Capture discontinuity correction — 2026-10-13
 
 The normal worker was run with its real microphone and output-device capture on a development desktop. Speaking with the desktop idle reproduced recurring microphone discontinuities. No meeting-client or target-laptop acceptance is implied by these runs.
