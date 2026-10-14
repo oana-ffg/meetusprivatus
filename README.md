@@ -20,7 +20,7 @@ The archive includes the .NET runtime and verified Whisper/Silero models; no SDK
 
 Updates are explicitly requested downloads from this public GitHub repository. The updater never reads or uploads meeting content. `Start.cmd` and the recording application remain offline and never invoke the updater. A recording and an update cannot run together. If replacement fails, the previous version is restored; if Windows interrupts recovery, run `Update.cmd` again before recording. It preserves the backup and blocks recording until recovery finishes. Modified packaged files or colliding user files cause an inspectable error instead of being silently overwritten.
 
-For an offline update, bring the release ZIP and its `.zip.sha256` file to the machine. With both files in the application folder, this release can be installed using `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Update.ps1 -Archive .\meetus-privatus-0.1.0-preview.3-win-x64.zip -Checksum .\meetus-privatus-0.1.0-preview.3-win-x64.zip.sha256`. The same integrity and preservation checks apply. Use a writable local application folder without links or junctions.
+For an offline update, bring the release ZIP and its `.zip.sha256` file to the machine. With both files in the application folder, this release can be installed using `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Update.ps1 -Archive .\meetus-privatus-0.1.0-preview.4-win-x64.zip -Checksum .\meetus-privatus-0.1.0-preview.4-win-x64.zip.sha256`. The same integrity and preservation checks apply. Use a writable local application folder without links or junctions.
 
 ## Build and setup
 
