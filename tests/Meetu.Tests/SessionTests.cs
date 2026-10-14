@@ -45,6 +45,50 @@ public sealed class SessionTests
         Assert.Empty(Directory.GetDirectories(paths.AudioRoot));
     }
 
+    [Fact]
+    public async Task CaptureGapsWaitForRecognitionInsteadOfBlockingAssembly()
+    {
+        using var directory = new TestDirectory();
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        var model = Path.Combine(directory.Path, "synthetic-model.bin"); File.WriteAllBytes(model, [0]);
+        var config = new AppConfig { OutputDirectory = Path.Combine(directory.Path, "transcripts"),
+            ModelPath = model, VadPath = model, ClipSeconds = 5 };
+        var capture = new SyntheticCapture();
+        var recognizer = new PausedRecognizer();
+        var session = new CaptureSession(config, paths, _ => capture, _ => recognizer);
+        using var workerLock = new FileStream(Path.Combine(paths.Root, "worker.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var run = session.RunAsync();
+        try
+        {
+            await capture.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            for (var packet = 0; packet < 5; packet++) capture.Emit(AudioSource.Local);
+            await recognizer.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            // Recognition is now busy. A discontinuity must queue its gap record behind it
+            // while assembly keeps draining capture into the next clip.
+            capture.Emit(AudioSource.Local, AudioClientBufferFlags.DataDiscontinuity);
+            for (var packet = 0; packet < 4; packet++) capture.Emit(AudioSource.Local);
+            var workspace = Assert.Single(Directory.GetDirectories(paths.AudioRoot));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (!ClosedClips(workspace, 2)) await Task.Delay(10, timeout.Token);
+            Assert.Equal("Capturing", session.Status.State);
+            var sessionDirectory = session.Status.SessionDirectory!;
+            Assert.Empty(Directory.GetFiles(Path.Combine(sessionDirectory, "segments"), "*.json"));
+            Assert.DoesNotContain("[GAP:", File.ReadAllText(Path.Combine(sessionDirectory, "local.txt")));
+        }
+        finally
+        {
+            session.Stop();
+            await capture.Stopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            recognizer.Resume.TrySetResult();
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        Assert.Equal("Complete", session.Status.State);
+        var text = File.ReadAllText(Path.Combine(session.Status.SessionDirectory!, "local.txt"));
+        Assert.Equal(1, text.Split("[GAP: Audio device reported a capture discontinuity.]").Length - 1);
+        Assert.Equal(2, text.Split("Synthetic queued speech.").Length - 1);
+        Assert.Empty(Directory.GetDirectories(paths.AudioRoot));
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -72,7 +116,7 @@ public sealed class SessionTests
             await recognizer.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             workspace = Assert.Single(Directory.GetDirectories(paths.AudioRoot));
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            while (!FourClosedClips(workspace)) await Task.Delay(10, timeout.Token);
+            while (!ClosedClips(workspace, 4)) await Task.Delay(10, timeout.Token);
             if (storageFailure)
             {
                 // Make the owned audio destination unavailable after four clips are queued.
@@ -114,10 +158,10 @@ public sealed class SessionTests
         }
     }
 
-    private static bool FourClosedClips(string workspace)
+    private static bool ClosedClips(string workspace, int count)
     {
         var files = Directory.GetFiles(workspace, "*.pcm");
-        if (files.Length != 4) return false;
+        if (files.Length != count) return false;
         foreach (var file in files)
         {
             try
@@ -143,11 +187,11 @@ public sealed class SessionTests
         public bool Disposed { get; private set; }
         public void Start(CaptureBuffer callback, Action<string> failed)
         { receive = callback; startedTimestamp = Stopwatch.GetTimestamp(); Started.TrySetResult(); }
-        public void Emit(AudioSource source)
+        public void Emit(AudioSource source, AudioClientBufferFlags flags = 0)
         {
             var timestamp = startedTimestamp + packets[(int)source]++ * Stopwatch.Frequency;
             var qpc = (long)(timestamp * (10_000_000.0 / Stopwatch.Frequency));
-            receive!(source, new byte[32000], (AudioClientBufferFlags)0, packets[(int)source] * 16000L, qpc);
+            receive!(source, new byte[32000], flags, packets[(int)source] * 16000L, qpc);
         }
         public void EmitEmpty(AudioSource source) => receive!(source, [],
             AudioClientBufferFlags.DataDiscontinuity | AudioClientBufferFlags.TimestampError, 0, 0);

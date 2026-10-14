@@ -66,6 +66,30 @@ public sealed class PipelineTests
     }
 
     [Fact]
+    public async Task PacketQueueHoldsThirtySecondsOfAudioFromBothSourcesAndBoundsPacketCount()
+    {
+        var queue = new PacketQueue();
+        // One-second packets, alternating sources: 30 seconds from each fills the queue exactly.
+        for (var second = 0; second < PacketQueue.MaximumSeconds * 2; second++)
+            Assert.True(queue.TryWrite(new AudioPacket(second % 2 == 0 ? AudioSource.Local : AudioSource.Remote, new byte[32000], second / 2, false)));
+        Assert.Equal(PacketQueue.MaximumBytes, queue.Bytes);
+        Assert.False(queue.TryWrite(new AudioPacket(AudioSource.Local, new byte[2], 30, false)));
+        Assert.Equal(PacketQueue.MaximumBytes, queue.Bytes);
+        await using (var reader = queue.ReadAllAsync().GetAsyncEnumerator())
+        {
+            Assert.True(await reader.MoveNextAsync());
+            Assert.Equal(PacketQueue.MaximumBytes - 32000, queue.Bytes);
+            Assert.True(queue.TryWrite(new AudioPacket(AudioSource.Local, new byte[32000], 30, false)));
+        }
+
+        var tiny = new PacketQueue();
+        for (var packet = 0; packet < PacketQueue.MaximumPackets; packet++)
+            Assert.True(tiny.TryWrite(new AudioPacket(AudioSource.Local, new byte[2], packet / 16000.0, false)));
+        Assert.False(tiny.TryWrite(new AudioPacket(AudioSource.Local, new byte[2], 1, false)));
+        Assert.Equal(PacketQueue.MaximumPackets * 2L, tiny.Bytes);
+    }
+
+    [Fact]
     public void BothSourcesShareStorageAndAgeBudget()
     {
         var budget = new PendingBudget();

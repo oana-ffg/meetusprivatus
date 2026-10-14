@@ -44,9 +44,8 @@ public sealed class CaptureSession
         TranscriptStore? transcripts = null;
         var sessionId = Guid.NewGuid().ToString("N");
         var startedUtc = DateTimeOffset.UtcNow;
-        var packets = Channel.CreateBounded<AudioPacket>(new BoundedChannelOptions(256)
-        { SingleReader = true, SingleWriter = false, FullMode = BoundedChannelFullMode.Wait });
-        var clips = Channel.CreateBounded<AudioClip>(new BoundedChannelOptions(1500)
+        var packets = new PacketQueue();
+        var pending = Channel.CreateBounded<PendingWork>(new BoundedChannelOptions(1500)
         { SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait });
         using var cancelInference = new CancellationTokenSource();
         using var cancelMonitor = new CancellationTokenSource();
@@ -86,7 +85,7 @@ public sealed class CaptureSession
                 if (buffer.Length > 32000 || buffer.Length % 2 != 0)
                 { fault.TrySetResult("Capture returned an invalid or oversized audio packet."); return; }
                 var arrival = Stopwatch.GetTimestamp();
-                diagnostics.Received(source, buffer.Length, flags, position, qpc, arrival, packets.Reader.Count);
+                diagnostics.Received(source, buffer.Length, flags, position, qpc, arrival, packets.Count, packets.Bytes);
                 // WASAPI can report no available frames. This is not an audio packet and its
                 // unset timing fields must not replace the previous real packet's timeline.
                 if (buffer.IsEmpty) { diagnostics.CallbackCompleted(source, arrival); return; }
@@ -94,13 +93,13 @@ public sealed class CaptureSession
                 var clock = source == AudioSource.Local ? localClock : remoteClock;
                 var timing = clock.Stamp(buffer.Length / 2, qpc,
                     (flags & AudioClientBufferFlags.TimestampError) == 0, discontinuity, arrival);
-                if (!packets.Writer.TryWrite(new AudioPacket(source, buffer.ToArray(), timing.StartSeconds,
+                if (!packets.TryWrite(new AudioPacket(source, buffer.ToArray(), timing.StartSeconds,
                     discontinuity, timing.CapturedTimestamp)))
                     fault.TrySetResult("Audio capture queue filled. Capture stopped to protect meeting responsiveness.");
                 diagnostics.CallbackCompleted(source, arrival);
             }
-            assembleTask = AssembleAsync(packets.Reader, clips.Writer, workspace.DirectoryPath, transcripts, diagnostics);
-            recognitionTask = RecognizeAsync(clips.Reader, recognizer, transcripts, diagnostics, cancelInference.Token);
+            assembleTask = AssembleAsync(packets, pending.Writer, workspace.DirectoryPath, diagnostics);
+            recognitionTask = RecognizeAsync(pending.Reader, recognizer, transcripts, diagnostics, cancelInference.Token);
             monitorTask = MonitorAsync(capture, workspace, cancelMonitor.Token);
             using var captureDeadline = new CancellationTokenSource(TimeSpan.FromMinutes(config.MaxSessionMinutes));
             using var deadlineRegistration = captureDeadline.Token.Register(Stop);
@@ -111,7 +110,7 @@ public sealed class CaptureSession
             captureSeconds = sessionClock.Elapsed.TotalSeconds;
             Update(Status with { State = "Finishing", Error = fault.Task.IsCompleted ? await fault.Task : null });
             await capture.StopAsync();
-            packets.Writer.TryComplete();
+            packets.Complete();
             await assembleTask;
             await recognitionTask;
             cancelMonitor.Cancel();
@@ -135,7 +134,7 @@ public sealed class CaptureSession
             if (captureSeconds == 0) captureSeconds = sessionClock.Elapsed.TotalSeconds;
             cancelInference.Cancel(); cancelMonitor.Cancel();
             if (capture is not null) await capture.StopAsync();
-            packets.Writer.TryComplete(); clips.Writer.TryComplete();
+            packets.Complete(); pending.Writer.TryComplete();
             if (assembleTask is not null) { try { await assembleTask; } catch { /* failure recorded below */ } }
             if (recognitionTask is not null) { try { await recognitionTask; } catch { /* failure recorded below */ } }
             if (monitorTask is not null) { try { await monitorTask; } catch { /* failure recorded below */ } }
@@ -168,15 +167,19 @@ public sealed class CaptureSession
         }
     }
 
-    private async Task AssembleAsync(ChannelReader<AudioPacket> packets, ChannelWriter<AudioClip> clips,
-        string workspace, TranscriptStore transcripts, CaptureDiagnostics diagnostics)
+    // Closed clips and capture-gap records share one ordered queue. Exactly one field is set.
+    private readonly record struct PendingWork(AudioClip? Clip, TranscriptRecord? Gap);
+
+    private async Task AssembleAsync(PacketQueue packets, ChannelWriter<PendingWork> pending,
+        string workspace, CaptureDiagnostics diagnostics)
     {
-        void Emit(AudioClip clip)
+        // Assembly drains capture, so it never waits for transcript storage; recognition commits gaps too.
+        void Enqueue(PendingWork work)
         {
-            if (!clips.TryWrite(clip)) throw new IOException("Pending clip queue filled.");
+            if (!pending.TryWrite(work)) throw new IOException("Pending clip queue filled.");
         }
-        // Only this task writes capture-gap records; recognition also commits under a common lock.
-        void Gap(TranscriptRecord record) => CommitTranscript(transcripts, record, diagnostics);
+        void Emit(AudioClip clip) => Enqueue(new PendingWork(clip, null));
+        void Gap(TranscriptRecord record) => Enqueue(new PendingWork(null, record));
         using var local = new ClipAssembler(AudioSource.Local, workspace, budget, config.ClipSeconds, Emit, Gap);
         using var remote = new ClipAssembler(AudioSource.Remote, workspace, budget, config.ClipSeconds, Emit, Gap);
         try
@@ -195,36 +198,21 @@ public sealed class CaptureSession
             // Unfinished partial clips are deleted with the workspace; the session is marked incomplete.
             fault.TrySetResult("Audio storage or segmentation failed. Capture stopped; transcript may be incomplete.");
         }
-        finally { clips.TryComplete(); }
+        finally { pending.TryComplete(); }
     }
 
-    private async Task RecognizeAsync(ChannelReader<AudioClip> clips, IClipRecognizer recognizer,
+    // The only transcript writer while a session runs; the final incomplete-session note follows its join.
+    private async Task RecognizeAsync(ChannelReader<PendingWork> pending, IClipRecognizer recognizer,
         TranscriptStore transcripts, CaptureDiagnostics diagnostics, CancellationToken cancellationToken)
     {
-        await foreach (var clip in clips.ReadAllAsync())
+        await foreach (var work in pending.ReadAllAsync())
         {
             try
             {
-                TranscriptRecord record;
-                var remaining = PendingBudget.MaximumAge - PendingBudget.ExpiryMargin - Stopwatch.GetElapsedTime(clip.CreatedTimestamp);
-                if (cancellationToken.IsCancellationRequested || remaining <= TimeSpan.Zero)
-                    record = Missing(clip, cancellationToken.IsCancellationRequested);
-                else
-                {
-                    using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    deadline.CancelAfter(remaining);
-                    try
-                    {
-                        diagnostics.RecognitionStarted();
-                        record = await recognizer.TranscribeAsync(clip, deadline.Token);
-                    }
-                    catch (OperationCanceledException) when (deadline.IsCancellationRequested)
-                    { record = Missing(clip, cancellationToken.IsCancellationRequested); }
-                    catch (FileNotFoundException) when (Stopwatch.GetElapsedTime(clip.CreatedTimestamp) >= PendingBudget.MaximumAge - PendingBudget.ExpiryMargin)
-                    { record = Missing(clip, false); }
-                    finally { diagnostics.RecognitionEnded(); }
-                }
-                CommitTranscript(transcripts, record, diagnostics);
+                var record = work.Gap ?? await TranscribeOrMarkMissingAsync(work.Clip!, recognizer, diagnostics, cancellationToken);
+                var started = Stopwatch.GetTimestamp();
+                transcripts.Commit(record);
+                diagnostics.CommitCompleted(started);
             }
             catch
             {
@@ -233,16 +221,29 @@ public sealed class CaptureSession
             }
             finally
             {
-                File.Delete(clip.Path);
-                budget.Remove(clip.Id);
+                if (work.Clip is { } clip) { File.Delete(clip.Path); budget.Remove(clip.Id); }
             }
         }
     }
 
-    private static void CommitTranscript(TranscriptStore transcripts, TranscriptRecord record, CaptureDiagnostics diagnostics)
+    private static async Task<TranscriptRecord> TranscribeOrMarkMissingAsync(AudioClip clip, IClipRecognizer recognizer,
+        CaptureDiagnostics diagnostics, CancellationToken cancellationToken)
     {
-        var started = Stopwatch.GetTimestamp();
-        lock (transcripts) { transcripts.Commit(record); diagnostics.CommitCompleted(started); }
+        var remaining = PendingBudget.MaximumAge - PendingBudget.ExpiryMargin - Stopwatch.GetElapsedTime(clip.CreatedTimestamp);
+        if (cancellationToken.IsCancellationRequested || remaining <= TimeSpan.Zero)
+            return Missing(clip, cancellationToken.IsCancellationRequested);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(remaining);
+        try
+        {
+            diagnostics.RecognitionStarted();
+            return await recognizer.TranscribeAsync(clip, deadline.Token);
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        { return Missing(clip, cancellationToken.IsCancellationRequested); }
+        catch (FileNotFoundException) when (Stopwatch.GetElapsedTime(clip.CreatedTimestamp) >= PendingBudget.MaximumAge - PendingBudget.ExpiryMargin)
+        { return Missing(clip, false); }
+        finally { diagnostics.RecognitionEnded(); }
     }
 
     private static TranscriptRecord Missing(AudioClip clip, bool sessionFailure) => new(clip.Id, clip.Source,

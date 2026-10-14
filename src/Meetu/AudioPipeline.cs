@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Threading.Channels;
 
 namespace Meetu;
 
@@ -8,6 +9,39 @@ public sealed record AudioPacket(AudioSource Source, byte[] Pcm, double StartSec
 public sealed record AudioClip(string Id, AudioSource Source, string Path, double StartSeconds, int SampleCount, long CreatedTimestamp)
 {
     public double EndSeconds => StartSeconds + SampleCount / 16000.0;
+}
+
+// Capture-to-assembly handoff. It is bounded by queued audio so short disk or scheduling stalls
+// in assembly do not stop capture, and by packet count so tiny packets cannot grow it without limit.
+public sealed class PacketQueue
+{
+    public const int MaximumSeconds = 30;
+    public const long MaximumBytes = 16000L * 2 * 2 * MaximumSeconds;
+    public const int MaximumPackets = 12_000;
+    private readonly Channel<AudioPacket> channel = Channel.CreateBounded<AudioPacket>(new BoundedChannelOptions(MaximumPackets)
+    { SingleReader = true, SingleWriter = false, FullMode = BoundedChannelFullMode.Wait });
+    private long bytes;
+    public int Count => channel.Reader.Count;
+    public long Bytes => Interlocked.Read(ref bytes);
+
+    // Nonblocking; safe to call from both capture callbacks.
+    public bool TryWrite(AudioPacket packet)
+    {
+        if (Interlocked.Add(ref bytes, packet.Pcm.Length) <= MaximumBytes && channel.Writer.TryWrite(packet)) return true;
+        Interlocked.Add(ref bytes, -packet.Pcm.Length);
+        return false;
+    }
+
+    public void Complete() => channel.Writer.TryComplete();
+
+    public async IAsyncEnumerable<AudioPacket> ReadAllAsync()
+    {
+        await foreach (var packet in channel.Reader.ReadAllAsync())
+        {
+            Interlocked.Add(ref bytes, -packet.Pcm.Length);
+            yield return packet;
+        }
+    }
 }
 
 public sealed class PendingBudget
