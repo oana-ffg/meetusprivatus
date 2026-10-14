@@ -11,6 +11,10 @@ A real worker session failed after 288.75 seconds with "Audio capture queue fill
 
 A real multi-second disk stall was not reproduced. The synthetic session check verifies writer separation and continued assembly while recognition is paused; it does not inject a slow transcript flush or reproduce the original incident. Meeting-client, target-laptop, and the other gates below remain open.
 
+## Release update path limitation — 2026-10-14
+
+An actual preview.3-to-preview.4 offline update check in a deeply nested isolated installation failed before file replacement at the incoming executable's startup check. A separate reproduction with a 263-character executable path failed in Windows PowerShell with an argument-parsing error and failed to launch from PowerShell 7/direct process invocation. The identical packaged executable passed its help check in a shallower directory. The updater stages beneath the installation folder, which lengthens incoming paths. This existing path limitation is unresolved; installations should use a short local folder path. The failed update left the previous installation and synthetic user files intact.
+
 ## Capture discontinuity correction — 2026-10-13
 
 The normal worker was run with its real microphone and output-device capture on a development desktop. Speaking with the desktop idle reproduced recurring microphone discontinuities. No meeting-client or target-laptop acceptance is implied by these runs.

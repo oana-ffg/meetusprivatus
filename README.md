@@ -14,6 +14,8 @@ A small Windows 11 meeting transcriber. It captures the mic and everything playe
 
 The archive includes the .NET runtime and verified Whisper/Silero models; no SDK or model download is needed. No account or GPU is required. Mic capture includes speech while muted in Zoom/Teams, and playback includes other apps on the selected output. Preview releases retain the validation limits stated above.
 
+Keep the installation folder path short. The updater stages a complete incoming package beneath it; a validation installation produced a 263-character executable path that failed the startup check in Windows PowerShell before replacement began. If updating reports that the new executable failed its startup check, a deeply nested installation may be the cause. Stop recording, move the complete application folder to a shallower local folder, and retry. This path limitation remains unresolved.
+
 ## Update
 
 **Stop recording and let queued transcription finish, then double-click `Update.cmd`.** It checks the most recently published release, including previews, downloads the complete package, verifies its SHA-256 checksum and every packaged file, and updates the current folder. Transcripts, saved settings, and unrelated user files are preserved. No GitHub account, browser download, or re-extraction is needed for subsequent updates. Install this release once to obtain the updater; earlier releases do not include it.
