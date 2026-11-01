@@ -78,6 +78,8 @@ Each timestamp-plus-GUID session directory contains local.txt, remote.txt, canon
 
 Write each canonical GUID record to a unique temporary file, flush to disk, and atomically rename. Never replace a committed identity on retry. Rebuild sorted UTF-8 text views and atomically replace them. If interrupted between canonical commit and export, repair rebuilds text without audio replay or duplication. Repair rejects unrelated folders. The two text views are not one filesystem transaction; canonical records are the recovery source.
 
+A new silent/whitespace-only record without a gap still commits its canonical identity, but skips sorting and replacing an already-current text view. Speech and gaps export immediately. Failed exports remain pending for the next commit from that source, including silent clips; identity retries and explicit repair still rebuild views.
+
 Keep text until manual deletion. The segments directory contains the same private spoken content and has the same retention. No summaries, inferred tasks, invented titles/speakers, or transcript-bearing diagnostics.
 
 ## Setup, packaging, and licensing
