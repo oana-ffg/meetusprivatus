@@ -11,12 +11,17 @@ public sealed record TranscriptRecord(string Id, AudioSource Source, double Star
 public sealed class TranscriptStore
 {
     private readonly string recordsDirectory;
-    // Canonical records are read once; each commit then rewrites only its own source's text view.
+    // Canonical records are read once; changed views are rebuilt only for their own source.
     private readonly Dictionary<string, TranscriptRecord> records;
+    private readonly Action<string, string> writeView;
+    private readonly HashSet<AudioSource> dirtyViews = [];
     public string DirectoryPath { get; }
 
-    public TranscriptStore(string directory)
+    public TranscriptStore(string directory) : this(directory, JsonFiles.WriteText) { }
+
+    internal TranscriptStore(string directory, Action<string, string> writeView)
     {
+        this.writeView = writeView;
         DirectoryPath = directory;
         PrivateDirectory.Create(directory);
         recordsDirectory = Path.Combine(directory, "segments");
@@ -36,6 +41,10 @@ public sealed class TranscriptStore
         {
             JsonFiles.Write(Path.Combine(recordsDirectory, record.Id + ".json"), record);
             records.Add(record.Id, record);
+            // Silence still gets a durable canonical identity, but adds nothing to the view.
+            // A failed export must be retried even if the next clip contains no speech.
+            if (record.Gap is null && record.Segments.All(segment => string.IsNullOrWhiteSpace(segment.Text))
+                && !dirtyViews.Contains(record.Source)) return;
         }
         Render(record.Source);
     }
@@ -47,6 +56,7 @@ public sealed class TranscriptStore
 
     private void Render(AudioSource source)
     {
+        dirtyViews.Add(source);
         var text = new StringBuilder(source == AudioSource.Local
             ? "Microphone speech (includes notes spoken while muted in the meeting app).\n\n"
             : "Output device playback (remote speakers grouped together; includes audio from other apps on this device).\n\n");
@@ -62,7 +72,8 @@ public sealed class TranscriptStore
                     text.AppendLine($"[{Timestamp(segment.StartSeconds)}–{Timestamp(segment.EndSeconds)}] {clean}");
             }
         }
-        JsonFiles.WriteText(Path.Combine(DirectoryPath, source == AudioSource.Local ? "local.txt" : "remote.txt"), text.ToString());
+        writeView(Path.Combine(DirectoryPath, source == AudioSource.Local ? "local.txt" : "remote.txt"), text.ToString());
+        dirtyViews.Remove(source);
     }
 
     private static string Timestamp(double seconds)
