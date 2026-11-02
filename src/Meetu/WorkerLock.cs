@@ -4,19 +4,37 @@ namespace Meetu;
 // Controllers may probe it, but only acquiring it grants permission to start or clean up.
 internal static class WorkerLock
 {
-    public static FileStream Acquire(StatePaths paths)
+    private const int MaximumRetries = 5;
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(50);
+
+    public static FileStream Acquire(StatePaths paths) => Acquire(paths, Thread.Sleep);
+
+    // The delay seam lets contention tests synchronize with a real probe instead of racing a timer.
+    internal static FileStream Acquire(StatePaths paths, Action<TimeSpan> delay)
     {
-        try { return Open(paths, FileMode.OpenOrCreate); }
-        catch (IOException exception) when (IsSharingViolation(exception))
-        { throw new InvalidOperationException("A recording is still running or finishing. Wait for it to complete, then retry."); }
+        for (var retry = 0; ; retry++)
+        {
+            try { return Open(paths, FileMode.OpenOrCreate); }
+            catch (IOException exception) when (IsSharingViolation(exception))
+            {
+                if (retry == MaximumRetries)
+                    throw new InvalidOperationException("A recording is still running or finishing. Wait for it to complete, then retry.");
+                // A controller probe can briefly own the handle without a recording being active.
+                // Every attempt still requires the same exclusive open; waiting grants no ownership.
+                delay(RetryDelay);
+            }
+        }
     }
 
-    public static bool IsHeld(StatePaths paths)
+    public static bool IsHeld(StatePaths paths) => IsHeld(paths, null);
+
+    internal static bool IsHeld(StatePaths paths, Action? probeOpened)
     {
         try
         {
             // Open, rather than OpenOrCreate: status/stop must not create a lock file.
             using var probe = Open(paths, FileMode.Open);
+            probeOpened?.Invoke();
             return false;
         }
         catch (FileNotFoundException) { return false; }
