@@ -35,6 +35,10 @@ public static class ControlServer
 
     public static async Task<SessionStatus?> RequestAsync(StatePaths paths, bool stop = false)
     {
+        // A missing pipe alone cannot distinguish an absent worker from one still starting
+        // or serving another controller. Only skip the wait if nobody owns the worker lock.
+        // This is an observation, not permission to start: the worker must still acquire it.
+        if (!WorkerLock.IsHeld(paths)) return null;
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
         await using var pipe = new NamedPipeClientStream(".", paths.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         try

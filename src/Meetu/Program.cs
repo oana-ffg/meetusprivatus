@@ -77,7 +77,7 @@ public static class Program
                     if (!File.Exists(Path.Combine(sessionDirectory, "session.json")) || !Directory.Exists(Path.Combine(sessionDirectory, "segments")))
                         throw new ArgumentException("This is not a recognizable meeting transcript directory.");
                     // A live worker may still commit to this session; never overwrite its text views.
-                    using (AcquireWorkerLock(paths)) new TranscriptStore(sessionDirectory).Render();
+                    using (WorkerLock.Acquire(paths)) new TranscriptStore(sessionDirectory).Render();
                     Console.WriteLine("Text files rebuilt from committed segment records."); return 0;
                 default: throw new ArgumentException("Unknown command. Use meetus help.");
             }
@@ -122,24 +122,16 @@ public static class Program
         return lease;
     }
 
-    // The worker holds this exclusive handle for its lifetime; cleanup and repair take it briefly.
-    private static FileStream AcquireWorkerLock(StatePaths paths)
-    {
-        try { return new FileStream(Path.Combine(paths.Root, "worker.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
-        catch (IOException exception) when (exception.HResult == unchecked((int)0x80070020)) // ERROR_SHARING_VIOLATION
-        { throw new InvalidOperationException("A recording is still running or finishing. Wait for it to complete, then retry."); }
-    }
-
     private static void Cleanup(StatePaths paths)
     {
-        using var workerLock = AcquireWorkerLock(paths);
+        using var workerLock = WorkerLock.Acquire(paths);
         ClipWorkspace.CleanupAbandoned(paths.AudioRoot);
     }
 
     private static async Task<int> RunWorkerAsync(StatePaths paths, bool interactive = false)
     {
         // The handle is held for the worker lifetime, including cleanup and model disposal.
-        using var workerLock = AcquireWorkerLock(paths);
+        using var workerLock = WorkerLock.Acquire(paths);
         using var process = Process.GetCurrentProcess();
         process.PriorityClass = ProcessPriorityClass.BelowNormal;
         void ShowStatus(SessionStatus status)
@@ -193,6 +185,8 @@ public static class Program
                 var status = File.Exists(paths.StatusFile) ? File.ReadAllText(paths.StatusFile) : "Worker exited before capture started.";
                 Console.Error.WriteLine(status); return 1;
             }
+            // Requests can now return immediately before the child owns its lock.
+            // Keep startup polling paced even when no controller pipe exists yet.
             await Task.Delay(200);
         }
         Console.Error.WriteLine("Worker is still starting. Use status to check it, or stop to cancel."); return 1;

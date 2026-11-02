@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text;
+using System.Text.Json;
 using Meetu;
 using Xunit;
 using Xunit.Abstractions;
@@ -22,8 +23,100 @@ public sealed class ControlTests(ITestOutputHelper output)
         elapsed.Stop();
         output.WriteLine($"No worker, stop={stop}: {elapsed.Elapsed.TotalMilliseconds:F3} ms.");
         Assert.Null(response);
+        Assert.False(File.Exists(Path.Combine(paths.Root, "worker.lock")));
         Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(1),
             $"No-server request took {elapsed.Elapsed.TotalMilliseconds:F3} ms; expected less than 1000 ms.");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StartingWorkerCanOpenItsPipeAfterTheRequestBegins(bool stop)
+    {
+        using var directory = new TestDirectory();
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        using var workerLock = WorkerLock.Acquire(paths);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var request = ControlServer.RequestAsync(paths, stop);
+        // A worker owns the lock before its pipe exists. A short pipe timeout or
+        // a pipe-presence-only check must not declare that worker absent.
+        await Task.Delay(300, timeout.Token);
+        Assert.False(request.IsCompleted);
+        await using (var pipe = new NamedPipeServerStream(paths.PipeName, PipeDirection.InOut, 1,
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly))
+        {
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            var command = new byte[1];
+            Assert.Equal(1, await pipe.ReadAsync(command, timeout.Token));
+            Assert.Equal(stop ? (byte)1 : (byte)0, command[0]);
+            await pipe.WriteAsync(Encoding.UTF8.GetBytes("{\"state\":\"Starting\"}"), timeout.Token);
+        }
+        Assert.Equal("Starting", (await request.WaitAsync(timeout.Token))?.State);
+        Assert.True(WorkerLock.IsHeld(paths));
+    }
+
+    [Theory]
+    [InlineData("status")]
+    [InlineData("stop")]
+    public async Task CrashedWorkerStillReportsInterruptedWithoutWaiting(string command)
+    {
+        using var directory = new TestDirectory();
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        using (WorkerLock.Acquire(paths)) { } // A crash leaves the file, not the OS-held lock.
+        JsonFiles.Write(paths.StatusFile, new SessionStatus("Capturing", directory.Path, 32000, 1));
+        using var reply = new StringWriter();
+        var previousOutput = Console.Out;
+        var elapsed = Stopwatch.StartNew();
+        try
+        {
+            Console.SetOut(reply);
+            Assert.Equal(1, await Program.Main([command, "--state-dir", paths.Root]));
+        }
+        finally { elapsed.Stop(); Console.SetOut(previousOutput); }
+        var status = JsonSerializer.Deserialize<SessionStatus>(reply.ToString(), JsonFiles.Options)!;
+        Assert.Equal("Interrupted", status.State);
+        Assert.Equal(directory.Path, status.SessionDirectory);
+        Assert.Equal(32000, status.PendingBytes);
+        Assert.Contains("Worker unavailable", status.Error);
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(1),
+            $"Crashed-worker {command} took {elapsed.Elapsed.TotalMilliseconds:F3} ms.");
+    }
+
+    [Fact]
+    public async Task StartingWorkerWithoutAPipeStillExcludesASecondRecording()
+    {
+        using var directory = new TestDirectory();
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        using (WorkerLock.Acquire(paths))
+        {
+            Assert.True(WorkerLock.IsHeld(paths));
+            Assert.Throws<InvalidOperationException>(() => WorkerLock.Acquire(paths));
+            Assert.Equal(1, await Program.Main(["start", "--state-dir", paths.Root]));
+            Assert.False(File.Exists(paths.ConfigFile));
+            Assert.False(Directory.Exists(paths.AudioRoot));
+            Assert.True(WorkerLock.IsHeld(paths));
+            Assert.Throws<InvalidOperationException>(() => WorkerLock.Acquire(paths));
+        }
+        Assert.False(WorkerLock.IsHeld(paths));
+        using var nextWorker = WorkerLock.Acquire(paths);
+        Assert.True(WorkerLock.IsHeld(paths));
+    }
+
+    [Fact]
+    public async Task NoWorkerStartReachesConfigurationValidationWithoutPipeDelay()
+    {
+        using var directory = new TestDirectory();
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        // Force validation to fail before any models, capture or worker process can open.
+        var missingModel = Path.Combine(directory.Path, "missing-synthetic-model.bin");
+        JsonFiles.Write(paths.ConfigFile, new AppConfig { ModelPath = missingModel, VadPath = missingModel });
+        var elapsed = Stopwatch.StartNew();
+        Assert.Equal(1, await Program.Main(["start", "--state-dir", paths.Root]));
+        elapsed.Stop();
+        Assert.False(File.Exists(paths.StatusFile));
+        Assert.Empty(Directory.GetDirectories(paths.AudioRoot));
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(1),
+            $"No-worker startup validation took {elapsed.Elapsed.TotalMilliseconds:F3} ms.");
     }
 
     [Theory]
@@ -33,6 +126,7 @@ public sealed class ControlTests(ITestOutputHelper output)
     {
         using var directory = new TestDirectory();
         var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        using var workerLock = WorkerLock.Acquire(paths);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         async Task ReplyAndDisconnectAsync()
         {
@@ -56,6 +150,7 @@ public sealed class ControlTests(ITestOutputHelper output)
     {
         using var directory = new TestDirectory();
         var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        using var workerLock = WorkerLock.Acquire(paths);
         var session = new CaptureSession(new AppConfig(), paths);
         using var cancellation = new CancellationTokenSource();
         var server = ControlServer.RunAsync(paths, session, cancellation.Token);
