@@ -1,12 +1,31 @@
+using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text;
 using Meetu;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Meetu.Tests;
 
-public sealed class ControlTests
+public sealed class ControlTests(ITestOutputHelper output)
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NoWorkerRequestReturnsPromptly(bool stop)
+    {
+        using var directory = new TestDirectory();
+        // Each test directory has a GUID, so its derived pipe name has no possible worker.
+        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
+        var elapsed = Stopwatch.StartNew();
+        var response = await ControlServer.RequestAsync(paths, stop).WaitAsync(TimeSpan.FromSeconds(5));
+        elapsed.Stop();
+        output.WriteLine($"No worker, stop={stop}: {elapsed.Elapsed.TotalMilliseconds:F3} ms.");
+        Assert.Null(response);
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(1),
+            $"No-server request took {elapsed.Elapsed.TotalMilliseconds:F3} ms; expected less than 1000 ms.");
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("{\"state\":")]
