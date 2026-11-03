@@ -16,6 +16,16 @@ public static class AppPaths
 {
     public static string DurableRoot { get; } = ResolveDurableRoot(AppContext.BaseDirectory);
 
+    public static bool IsReplacedByUpdates(string path) => IsInside(path, AppContext.BaseDirectory, DurableRoot);
+
+    // Only an installed layout has a folder that updates replace, which is when the program folder and durable root differ.
+    internal static bool IsInside(string path, string programDirectory, string durableRoot)
+    {
+        var program = Path.GetFullPath(programDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (program.Equals(Path.GetFullPath(durableRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return false;
+        return (Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar).StartsWith(program, StringComparison.OrdinalIgnoreCase);
+    }
+
     internal static string ResolveDurableRoot(string programDirectory)
     {
         var directory = programDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -71,6 +81,9 @@ public sealed record AppConfig
         return File.Exists(path) ? path : null;
     }
 
+    [JsonIgnore] public bool HasStorageReplacedByUpdates =>
+        AppPaths.IsReplacedByUpdates(ResolvedOutputDirectory) || AppPaths.IsReplacedByUpdates(ResolvedSummaryModelPath);
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(ResolvedOutputDirectory) || !Path.IsPathFullyQualified(ResolvedOutputDirectory))
@@ -80,6 +93,8 @@ public sealed record AppConfig
         LocalPath.Require(ResolvedVadPath);
         // Existence is not required: recording works without a summary model, which is a separate setup download.
         LocalPath.Require(ResolvedSummaryModelPath);
+        if (HasStorageReplacedByUpdates)
+            throw new ArgumentException("Saved meetings and the summary model cannot live in the app's \"current\" folder, because updates replace it. Choose another location.");
         if (!File.Exists(ResolvedModelPath))
             throw new ArgumentException("The speech model is missing from this installation. Extract the complete release again.");
         if (!File.Exists(ResolvedVadPath))

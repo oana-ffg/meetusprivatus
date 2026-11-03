@@ -24,18 +24,26 @@ public sealed class ModelDownloader(HttpClient http, Func<TimeSpan, Cancellation
         LocalPath.Require(destinationDirectory);
         Directory.CreateDirectory(destinationDirectory);
         var target = Path.Combine(destinationDirectory, asset.FileName);
+        var partial = target + ".partial";
+        // A link at either name could lead anywhere, including a network share.
+        LocalPath.Require(target);
+        LocalPath.Require(partial);
         if (File.Exists(target))
         {
             if (await IsVerifiedAsync(target, asset, cancellationToken)) { progress(asset.Size, asset.Size); return; }
             throw new InvalidDataException($"{asset.FileName} already exists but does not match. Move it aside and try again; it was not overwritten.");
         }
-        var partial = target + ".partial";
         for (var attempt = 1; ; attempt++)
         {
             try
             {
                 await DownloadRemainderAsync(asset, partial, progress, cancellationToken);
                 break;
+            }
+            catch (OversizedDownloadException)
+            {
+                File.Delete(partial);
+                throw new InvalidDataException("The server sent more data than this model contains, so the download was discarded.");
             }
             catch (Exception exception) when (attempt < MaximumAttempts && IsTransient(exception) && !cancellationToken.IsCancellationRequested)
             {
@@ -66,6 +74,12 @@ public sealed class ModelDownloader(HttpClient http, Func<TimeSpan, Cancellation
         response.EnsureSuccessStatusCode();
         // A server may ignore the range request and send the whole file again.
         var resuming = response.StatusCode == HttpStatusCode.PartialContent;
+        if (resuming && response.Content.Headers.ContentRange?.From != offset)
+        {
+            // Appending this would corrupt the file. Starting over is the only thing that can help.
+            File.Delete(partial);
+            throw new IOException("The server resumed the download from the wrong position.");
+        }
         var received = resuming ? offset : 0;
         await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
         await using var file = new FileStream(partial, resuming ? FileMode.Append : FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, FileOptions.Asynchronous);
@@ -74,6 +88,8 @@ public sealed class ModelDownloader(HttpClient http, Func<TimeSpan, Cancellation
         progress(received, asset.Size);
         while (await source.ReadAsync(buffer, cancellationToken) is var read and > 0)
         {
+            // The pinned size bounds this, so a misbehaving server cannot fill the disk.
+            if (received + read > asset.Size) throw new OversizedDownloadException();
             await file.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
             received += read;
             if (received - lastReported >= 16 << 20) { progress(received, asset.Size); lastReported = received; }
@@ -87,6 +103,8 @@ public sealed class ModelDownloader(HttpClient http, Func<TimeSpan, Cancellation
         await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, FileOptions.Asynchronous | FileOptions.SequentialScan);
         return Convert.ToHexStringLower(await SHA256.HashDataAsync(file, cancellationToken)) == asset.Sha256;
     }
+
+    private sealed class OversizedDownloadException : Exception;
 
     // Client errors such as a missing file will not improve by trying again.
     private static bool IsTransient(Exception exception) => exception is IOException or TimeoutException ||

@@ -21,12 +21,9 @@ public sealed partial class Summarizer
     private const int MinimumWords = 25;
     private const int MaximumActionItems = 25;
     private const int MaximumListItems = 12;
-    private const double RepeatCoverage = 0.6;
     private const double CommitmentWindowSeconds = 45;
     private static readonly HashSet<string> FunctionWords = new(StringComparer.OrdinalIgnoreCase)
-        { "a", "an", "the", "to", "of", "for", "with", "and", "or", "in", "on", "at", "by", "it", "that", "this", "is", "are", "was", "were", "be" };
-    private static readonly HashSet<string> Negations = new(StringComparer.OrdinalIgnoreCase)
-        { "not", "no", "never", "without", "don't", "doesn't", "won't", "cannot", "can't" };
+        { "a", "an", "the", "to", "of", "for", "with", "and", "in", "on", "at", "by", "it", "that", "this", "is", "are", "was", "were", "be" };
 
     private const string TranscriptInstruction = "Transcript:\n";
     private const string MergeInstruction = "These are notes from consecutive parts of one meeting, not a transcript. Merge them into one set of notes in the same format. Combine repeated items and keep every distinct action item and decision:\n";
@@ -244,14 +241,15 @@ public sealed partial class Summarizer
     }
 
     // Small models turn a question such as "what happens if this slips?" into a task for the person listening, and no
-    // prompt wording stopped that without also losing real items. A task assigned to the reader must therefore rest on
-    // words actually said: its cited line asks or commits to something, or the Mic speaker committed to something nearby.
-    // An item without a citation cannot be checked, and losing a real task is worse than showing a doubtful one, so it stays.
+    // prompt wording stopped that without also losing real items. This rejects only that observed mistake, because no phrase
+    // list can recognize every way of committing to something: a cited question or someone else's statement, with no
+    // commitment in it and none from the Mic speaker nearby. An item without a citation cannot be checked, so it stays.
     private static bool IsBackedByWhatWasSaid(MeetingActionItem item, IReadOnlyList<PromptLine> lines)
     {
         var cited = lines.FirstOrDefault(line => line.Timestamp == item.Time);
-        if (cited is null) return true;
-        return CommitmentLanguage().IsMatch(cited.Text) || lines.Any(line => line.Source == AudioSource.Local
+        if (cited is null || CommitmentLanguage().IsMatch(cited.Text)) return true;
+        if (cited.Source == AudioSource.Local && !cited.Text.Contains('?')) return true;
+        return lines.Any(line => line.Source == AudioSource.Local
             && Math.Abs(line.StartSeconds - cited.StartSeconds) <= CommitmentWindowSeconds && CommitmentLanguage().IsMatch(line.Text));
     }
 
@@ -261,8 +259,8 @@ public sealed partial class Summarizer
     private static List<string> Clean(IEnumerable<string> items) =>
         WithoutRepeats(items, item => item, (_, _) => true).Take(MaximumListItems).ToList();
 
-    // Merging notes from several parts leaves the same item reworded. Losing a real action item is far worse
-    // than showing a repeat, so only clear cases collapse, and the fuller wording is the one kept.
+    // Merging notes from several parts can leave the same item twice. Losing a real action item is
+    // far worse than showing a repeat, so only clear cases collapse, and the fuller wording is the one kept.
     private static List<T> WithoutRepeats<T>(IEnumerable<T> items, Func<T, string> text, Func<T, T, bool> compatible)
     {
         var kept = new List<T>();
@@ -282,26 +280,17 @@ public sealed partial class Summarizer
     private static bool Compatible(string? first, string? second) =>
         first is null || second is null || string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
 
-    // A repeat when one wording says everything the other does and adds only incidental words. Requiring that
-    // keeps "enable the flag" apart from "disable the flag", which look almost identical to a similarity score.
+    // A repeat only when the wordings differ by little words. "Delete the database" and "delete the database backup" are
+    // different work, and no general rule can tell which extra words are incidental, so reworded items may still show twice.
     internal static bool IsRepeat(string first, string second)
     {
         var left = ContentWords(first);
-        var right = ContentWords(second);
-        var (smaller, larger) = left.Count <= right.Count ? (left, right) : (right, left);
-        if (smaller.Count == 0 || smaller.Count < larger.Count * RepeatCoverage) return false;
-        var smallerSet = smaller.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var largerSet = larger.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return smallerSet.IsSubsetOf(largerSet) && !larger.Where(word => !smallerSet.Contains(word)).Any(IsDistinguishing);
+        return left.Count > 0 && left.SetEquals(ContentWords(second));
     }
 
-    private static List<string> ContentWords(string text) => text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+    private static HashSet<string> ContentWords(string text) => text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
         .Select(word => word.Trim(',', '.', ';', ':', '!', '?', '(', ')', '"'))
-        .Where(word => word.Length > 0 && !FunctionWords.Contains(word)).ToList();
-
-    // A name, number or negation changes what an item means: "send it to Alice" is not "send it", and neither is "do not send it".
-    private static bool IsDistinguishing(string word) =>
-        char.IsUpper(word[0]) || word.Any(char.IsDigit) || Negations.Contains(word);
+        .Where(word => word.Length > 0 && !FunctionWords.Contains(word)).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private sealed record PromptLine(double StartSeconds, AudioSource Source, string Text)
     {

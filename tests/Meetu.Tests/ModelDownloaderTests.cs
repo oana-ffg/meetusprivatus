@@ -37,7 +37,9 @@ public sealed class ModelDownloaderTests
     private static HttpResponseMessage Remainder(HttpRequestMessage request)
     {
         var from = (int)request.Headers.Range!.Ranges.Single().From!.Value;
-        return new HttpResponseMessage(HttpStatusCode.PartialContent) { Content = new ByteArrayContent(Content[from..]) };
+        var content = new ByteArrayContent(Content[from..]);
+        content.Headers.ContentRange = new ContentRangeHeaderValue(from, Content.Length - 1, Content.Length);
+        return new HttpResponseMessage(HttpStatusCode.PartialContent) { Content = content };
     }
 
     private static Task Download(ScriptedServer server, string directory, Action<long, long>? progress = null) =>
@@ -94,6 +96,49 @@ public sealed class ModelDownloaderTests
         var corrupted = Content.ToArray(); corrupted[7] ^= 0xFF;
         await Assert.ThrowsAsync<InvalidDataException>(() => Download(new ScriptedServer((_, _) => Whole(corrupted)), directory.Path));
         Assert.Empty(Directory.GetFiles(directory.Path));
+    }
+
+    [Fact]
+    public async Task AResumeFromTheWrongPositionStartsOverInsteadOfCorruptingTheFile()
+    {
+        using var directory = new TestDirectory();
+        File.WriteAllBytes(Path.Combine(directory.Path, Asset.FileName + ".partial"), Content[..1500]);
+        var server = new ScriptedServer((_, attempt) =>
+        {
+            if (attempt > 1) return Whole(Content);
+            var wrong = new ByteArrayContent(Content[100..]);
+            wrong.Headers.ContentRange = new ContentRangeHeaderValue(100, Content.Length - 1, Content.Length);
+            return new HttpResponseMessage(HttpStatusCode.PartialContent) { Content = wrong };
+        });
+        await Download(server, directory.Path);
+        Assert.Null(server.Ranges[1]);
+        Assert.Equal(Content, File.ReadAllBytes(Path.Combine(directory.Path, Asset.FileName)));
+    }
+
+    [Fact]
+    public async Task AServerSendingTooMuchIsStoppedAtThePinnedSize()
+    {
+        using var directory = new TestDirectory();
+        var oversized = new byte[Content.Length * 3];
+        var server = new ScriptedServer((_, _) => Whole(oversized));
+        await Assert.ThrowsAsync<InvalidDataException>(() => Download(server, directory.Path));
+        Assert.Single(server.Ranges);
+        Assert.Empty(Directory.GetFiles(directory.Path));
+    }
+
+    [Fact]
+    public async Task ALinkedPartialFileIsRefusedBeforeAnythingIsWritten()
+    {
+        using var directory = new TestDirectory();
+        var outside = Path.Combine(directory.Path, "outside.bin");
+        File.WriteAllBytes(outside, [9]);
+        try { File.CreateSymbolicLink(Path.Combine(directory.Path, Asset.FileName + ".partial"), outside); }
+        catch (IOException) { return; } // Creating links needs Developer Mode or elevation, so this cannot run everywhere.
+        catch (UnauthorizedAccessException) { return; }
+        var server = new ScriptedServer((_, _) => Whole(Content));
+        await Assert.ThrowsAsync<ArgumentException>(() => Download(server, directory.Path));
+        Assert.Empty(server.Ranges);
+        Assert.Equal([9], File.ReadAllBytes(outside));
     }
 
     [Fact]

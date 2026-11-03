@@ -13,6 +13,8 @@ public sealed class MainViewModel : Observable
 {
     private const int IdlePollEverySeconds = 5;
     private const int PcmBytesPerSecond = 32000;
+    private const int UpdateHandoffAttempts = 10;
+    private static readonly TimeSpan UpdateHandoffDelay = TimeSpan.FromMilliseconds(200);
 
     private readonly StatePaths paths;
     private readonly SummaryRunner summaries;
@@ -386,7 +388,9 @@ public sealed class MainViewModel : Observable
             if (outcome != SummaryRunOutcome.Postponed) requestedSummaries.Remove(next);
             if (outcome == SummaryRunOutcome.Crashed)
                 // Recorded so the meeting is not retried forever; Regenerate remains available.
-                SummaryFiles.WriteFailure(next, null, "The summary process stopped unexpectedly, possibly from running out of memory. The transcript is unaffected.");
+                SummaryFiles.WriteFailure(next, null, summaries.LastError is { } reason
+                    ? $"The summary could not be generated. {reason} The transcript is unaffected."
+                    : "The summary process stopped unexpectedly, possibly from running out of memory. The transcript is unaffected.");
         }
         catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
@@ -462,15 +466,29 @@ public sealed class MainViewModel : Observable
         Raise(nameof(UpdateButtonLabel));
     }
 
-    // Update.exe replaces the folder this runs from, so nothing may still be running from it.
+    // Update.exe replaces the folder this runs from and force-closes anything still running from it.
     private async Task ApplyUpdateAsync()
     {
-        if (phase != RecordingPhase.Idle || await Task.Run(() => RecordingControl.IsWorkerRunning(paths)))
+        if (paths.LoadConfig().HasStorageReplacedByUpdates)
+        {
+            ShowError("Your saved meetings or summary model are in the app's \"current\" folder, which updating would delete. Choose another location in Settings and move the files first.");
+            return;
+        }
+        if (phase != RecordingPhase.Idle)
         {
             ShowError("A recording is running or finishing. Update when it has finished.");
             return;
         }
         summaries.Cancel();
+        network.Cancel();
+        // The summary was just asked to stop, so give it a moment; a recording will still be there afterwards.
+        for (var attempt = 0; attempt < UpdateHandoffAttempts && await Task.Run(RecordingControl.IsHelperRunningFromThisInstallation); attempt++)
+            await Task.Delay(UpdateHandoffDelay);
+        if (await Task.Run(RecordingControl.IsHelperRunningFromThisInstallation))
+        {
+            ShowError("A recording or another task from this installation is still running. Update when it has finished.");
+            return;
+        }
         updates.ApplyAfterExit(launchArguments);
         System.Windows.Application.Current.Shutdown();
     }

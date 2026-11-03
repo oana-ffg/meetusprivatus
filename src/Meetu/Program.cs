@@ -8,6 +8,7 @@ namespace Meetu;
 public static class Program
 {
     public const int UnknownCommandExitCode = 2;
+    public const int UnhandledFailureExitCode = 6;
 
     public static async Task<int> Main(string[] args)
     {
@@ -35,7 +36,7 @@ public static class Program
         catch (Exception exception)
         {
             Report($"error {exception.Message}");
-            return 1;
+            return UnhandledFailureExitCode;
         }
     }
 

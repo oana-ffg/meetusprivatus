@@ -204,6 +204,20 @@ public sealed class ControlTests(ITestOutputHelper output)
     }
 
     [Theory]
+    [InlineData(@"C:\app\current\saved", true)]
+    [InlineData(@"C:\app\current", true)]
+    [InlineData(@"C:\APP\CURRENT\saved", true)]
+    [InlineData(@"C:\app\transcripts", false)]
+    [InlineData(@"C:\app\current-old\saved", false)]
+    [InlineData(@"D:\meetings", false)]
+    public void StorageInsideTheFolderUpdatesReplaceIsRecognized(string path, bool expected)
+    {
+        Assert.Equal(expected, AppPaths.IsInside(path, @"C:\app\current", @"C:\app"));
+        // Outside an installed layout, nothing gets replaced.
+        Assert.False(AppPaths.IsInside(path, @"C:\app\current", @"C:\app\current"));
+    }
+
+    [Theory]
     [InlineData]
     [InlineData("run")]
     [InlineData("start")]

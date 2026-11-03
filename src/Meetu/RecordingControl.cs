@@ -9,6 +9,23 @@ public static class RecordingControl
     // status alone does not mean a recording ended: the request also returns null on a timeout.
     public static bool IsWorkerRunning(StatePaths paths) => WorkerLock.IsHeld(paths);
 
+    // Applying an update force-closes everything running from the program folder, whichever state directory it
+    // uses, so a recording anywhere in this installation must block it. Any helper still running counts.
+    public static bool IsHelperRunningFromThisInstallation()
+    {
+        var helper = Path.Combine(AppContext.BaseDirectory, "meetus.exe");
+        foreach (var process in Process.GetProcessesByName("meetus"))
+        {
+            using (process)
+            {
+                try { if (string.Equals(process.MainModule?.FileName, helper, StringComparison.OrdinalIgnoreCase)) return true; }
+                catch (System.ComponentModel.Win32Exception) { } // Another user's process: not running from this installation's lock scope.
+                catch (InvalidOperationException) { } // It has just exited.
+            }
+        }
+        return false;
+    }
+
     public static SessionStatus ReadStatus(SessionStatus? live, StatePaths paths)
     {
         if (live is not null) return live;

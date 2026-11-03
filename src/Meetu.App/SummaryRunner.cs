@@ -8,6 +8,8 @@ internal sealed class SummaryRunner(StatePaths paths)
 {
     private readonly HelperProcess helper = new();
 
+    public string? LastError { get; private set; }
+
     public async Task<SummaryRunOutcome> RunAsync(string sessionDirectory, bool cpuAfterGpuFailure, Action<SummaryProgress> progress)
     {
         var arguments = new List<string> { "summarize", "--state-dir", paths.Root, "--session-dir", sessionDirectory };
@@ -16,10 +18,13 @@ internal sealed class SummaryRunner(StatePaths paths)
         {
             if (HelperProcess.TryParseProgress(line, out var completed, out var total)) progress(new SummaryProgress((int)completed, (int)total));
         });
+        LastError = result.Error;
         if (result.Cancelled) return SummaryRunOutcome.Postponed;
         return result.ExitCode switch
         {
-            SummaryJob.CompletedExitCode or SummaryJob.FailedExitCode when SummaryFiles.Read(sessionDirectory) is not null => SummaryRunOutcome.Finished,
+            // These two mean the job itself recorded the outcome. Anything else, including a failure
+            // before the job began, recorded nothing, however old a summary file may already be there.
+            SummaryJob.CompletedExitCode or SummaryJob.FailedExitCode => SummaryRunOutcome.Finished,
             SummaryJob.InterruptedExitCode or SummaryJob.BusyExitCode => SummaryRunOutcome.Postponed,
             SummaryJob.GpuFailedExitCode => SummaryRunOutcome.GpuFailed,
             _ => SummaryRunOutcome.Crashed
