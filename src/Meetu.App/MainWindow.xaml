@@ -1,0 +1,366 @@
+<Window x:Class="Meetu.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:Meetu.App.ViewModels"
+        Title="Meetus Privatus" Width="1180" Height="780" MinWidth="820" MinHeight="520"
+        Icon="Assets/app.ico" WindowStartupLocation="CenterScreen">
+
+    <Window.TaskbarItemInfo>
+        <TaskbarItemInfo x:Name="TaskbarInfo" Description="Meetus Privatus" />
+    </Window.TaskbarItemInfo>
+
+    <Window.Resources>
+        <!-- Shared layout for the summary tab's simple "status plus optional action" states. -->
+        <Style x:Key="PanelMessage" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+        </Style>
+
+        <DataTemplate x:Key="MeetingRow" DataType="{x:Type vm:MeetingItem}">
+            <Grid Margin="2,3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}" />
+                    <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Caption}" />
+                </StackPanel>
+                <Border Grid.Column="1" Style="{StaticResource Chip}" Margin="8,0,0,0"
+                        Visibility="{Binding Badge, Converter={StaticResource VisibleWhenPresent}}">
+                    <TextBlock Text="{Binding Badge}" FontSize="11" />
+                </Border>
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate x:Key="TranscriptRowTemplate" DataType="{x:Type vm:TranscriptRow}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="64" />
+                    <ColumnDefinition Width="72" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding Time}" Style="{StaticResource Caption}" FontFamily="Cascadia Mono, Consolas" Margin="0,2,0,0" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal" ToolTip="{Binding SourceHint}" VerticalAlignment="Top" Margin="0,2,0,0">
+                    <Ellipse x:Name="SourceDot" Width="8" Height="8" Margin="0,0,6,0" Fill="{StaticResource PlaybackBrush}" />
+                    <TextBlock Text="{Binding SourceLabel}" Style="{StaticResource Caption}" />
+                </StackPanel>
+                <TextBlock x:Name="LineText" Grid.Column="2" Text="{Binding Text}" TextWrapping="Wrap" FontSize="14" />
+            </Grid>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsMic}" Value="True">
+                    <Setter TargetName="SourceDot" Property="Fill" Value="{StaticResource MicBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsGap}" Value="True">
+                    <Setter TargetName="LineText" Property="Foreground" Value="{StaticResource GapBrush}" />
+                    <Setter TargetName="LineText" Property="FontStyle" Value="Italic" />
+                    <Setter TargetName="SourceDot" Property="Fill" Value="{StaticResource GapBrush}" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <DataTemplate x:Key="BulletRow">
+            <Grid Margin="0,0,0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="16" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="•" FontSize="14" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                <TextBox Grid.Column="1" Text="{Binding Mode=OneWay}" Style="{StaticResource SelectableText}" />
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate x:Key="ActionItemTemplate" DataType="{x:Type vm:ActionItemRow}">
+            <Grid Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="26" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="&#xEA3A;" Style="{StaticResource Icon}" VerticalAlignment="Top" Margin="0,3,0,0"
+                           Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                <StackPanel Grid.Column="1">
+                    <TextBox Text="{Binding Item.Task, Mode=OneWay}" Style="{StaticResource SelectableText}" FontWeight="SemiBold" />
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <Border Style="{StaticResource Chip}" Visibility="{Binding Item.Owner, Converter={StaticResource VisibleWhenPresent}}">
+                            <TextBlock Text="{Binding Item.Owner}" FontSize="12" />
+                        </Border>
+                        <Border Style="{StaticResource Chip}" Visibility="{Binding Item.Due, Converter={StaticResource VisibleWhenPresent}}">
+                            <TextBlock FontSize="12">
+                                <Run Text="&#xE823;" FontFamily="{StaticResource IconFont}" FontSize="11" />
+                                <Run Text="{Binding Item.Due, Mode=OneWay}" />
+                            </TextBlock>
+                        </Border>
+                        <Button Style="{StaticResource LinkButton}" Command="{Binding Jump}" CommandParameter="{Binding Item.Time}"
+                                Visibility="{Binding Item.Time, Converter={StaticResource VisibleWhenPresent}}"
+                                ToolTip="Show this moment in the transcript" Margin="2,0,0,0">
+                            <TextBlock Text="{Binding Item.Time}" TextDecorations="Underline" />
+                        </Button>
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="304" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Sidebar: controls and the history of meetings. -->
+        <Border BorderThickness="0,0,1,0" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
+                Background="{DynamicResource LayerFillColorDefaultBrush}">
+            <Grid Margin="16">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid Margin="0,0,0,16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Image Source="{StaticResource AppLogo}" Width="28" Height="28" Margin="0,0,10,0" />
+                    <TextBlock Grid.Column="1" Text="Meetus Privatus" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <Button Grid.Column="2" Click="OpenSettings" ToolTip="Settings" AutomationProperties.Name="Settings" Padding="8,6">
+                        <TextBlock Text="&#xE713;" Style="{StaticResource Icon}" />
+                    </Button>
+                </Grid>
+
+                <Button x:Name="RecordButton" Grid.Row="1" Command="{Binding ToggleRecordingCommand}" AutomationProperties.Name="{Binding RecordLabel}">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource RecordButton}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsRecording}" Value="True">
+                                    <Setter Property="Background" Value="{StaticResource RecordingBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding RecordGlyph}" Style="{StaticResource Icon}" Margin="0,0,10,0" Foreground="White" />
+                        <TextBlock Text="{Binding RecordLabel}" Foreground="White" />
+                    </StackPanel>
+                </Button>
+
+                <TextBlock Grid.Row="2" Text="{Binding StatusLine}" Style="{StaticResource Caption}" Margin="2,8,2,8"
+                           TextWrapping="Wrap" Visibility="{Binding StatusLine, Converter={StaticResource VisibleWhenPresent}}" />
+
+                <Grid Grid.Row="3" Margin="0,8,0,0">
+                    <ListBox x:Name="MeetingList" ItemsSource="{Binding MeetingsView}" SelectedItem="{Binding SelectedMeeting}"
+                             ItemTemplate="{StaticResource MeetingRow}" Background="Transparent" BorderThickness="0"
+                             HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             VirtualizingPanel.IsVirtualizingWhenGrouping="True" VirtualizingPanel.ScrollUnit="Pixel"
+                             AutomationProperties.Name="Meetings">
+                        <ListBox.GroupStyle>
+                            <GroupStyle>
+                                <GroupStyle.HeaderTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Name}" Style="{StaticResource Caption}" FontWeight="SemiBold" Margin="6,10,0,4" />
+                                    </DataTemplate>
+                                </GroupStyle.HeaderTemplate>
+                            </GroupStyle>
+                        </ListBox.GroupStyle>
+                    </ListBox>
+                    <TextBlock Text="Your meetings will appear here." Style="{StaticResource Caption}" Margin="6,12"
+                               Visibility="{Binding HasMeetings, Converter={StaticResource VisibleWhenFalse}}" />
+                </Grid>
+
+                <StackPanel Grid.Row="4" Margin="6,8,6,0" Visibility="{Binding ShowUpdates, Converter={StaticResource VisibleWhenTrue}}">
+                    <TextBlock Text="{Binding VersionText}" Style="{StaticResource Caption}" />
+                    <TextBlock Text="{Binding UpdateText}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,0"
+                               Visibility="{Binding UpdateText, Converter={StaticResource VisibleWhenPresent}}" />
+                    <Button Style="{StaticResource LinkButton}" Command="{Binding UpdateCommand}" HorizontalAlignment="Left" Margin="0,2,0,0"
+                            AutomationProperties.Name="{Binding UpdateButtonLabel}">
+                        <TextBlock Text="{Binding UpdateButtonLabel}" TextDecorations="Underline" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Main area. -->
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Border Margin="24,16,24,0" Padding="14,10" CornerRadius="8" Background="{DynamicResource SystemFillColorCautionBackgroundBrush}"
+                    Visibility="{Binding Banner, Converter={StaticResource VisibleWhenPresent}}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="&#xE7BA;" Style="{StaticResource Icon}" Margin="0,0,10,0" />
+                    <TextBlock Grid.Column="1" Text="{Binding Banner}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                    <Button Grid.Column="2" Command="{Binding DismissBannerCommand}" Style="{StaticResource CommandButton}" ToolTip="Dismiss" AutomationProperties.Name="Dismiss">
+                        <TextBlock Text="&#xE711;" Style="{StaticResource Icon}" FontSize="12" />
+                    </Button>
+                </Grid>
+            </Border>
+
+            <!-- Shown until a meeting is selected. -->
+            <StackPanel Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="480"
+                        Visibility="{Binding ShowLanding, Converter={StaticResource VisibleWhenTrue}}">
+                <Image Source="{StaticResource AppLogo}" Width="64" Height="64" Margin="0,0,0,16" />
+                <TextBlock Text="Ready when your meeting is" FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,8" />
+                <TextBlock TextAlignment="Center" TextWrapping="Wrap" FontSize="14" Foreground="{DynamicResource TextFillColorSecondaryBrush}" Margin="0,0,0,20"
+                           Text="Press Start recording. Text appears as the meeting goes, and you get a summary with action items at the end. Everything stays on this PC." />
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="26" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="&#xE720;" Style="{StaticResource Icon}" Foreground="{StaticResource MicBrush}" />
+                            <TextBlock Grid.Column="1" TextTrimming="CharacterEllipsis">
+                                <Run Text="Mic:" FontWeight="SemiBold" />
+                                <Run Text="{Binding MicrophoneName, Mode=OneWay}" />
+                            </TextBlock>
+                        </Grid>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="26" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="&#xE767;" Style="{StaticResource Icon}" Foreground="{StaticResource PlaybackBrush}" />
+                            <TextBlock Grid.Column="1" TextTrimming="CharacterEllipsis">
+                                <Run Text="Playback:" FontWeight="SemiBold" />
+                                <Run Text="{Binding PlaybackName, Mode=OneWay}" />
+                            </TextBlock>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+                <TextBlock TextAlignment="Center" TextWrapping="Wrap" Style="{StaticResource Caption}"
+                           Text="The mic keeps recording while you are muted in Zoom or Teams. Playback includes every app on that device, not only the meeting." />
+            </StackPanel>
+
+            <!-- The selected meeting. -->
+            <Grid Grid.Row="1" DataContext="{Binding Detail}" Margin="24,16,24,0"
+                  Visibility="{Binding Converter={StaticResource VisibleWhenPresent}}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="{Binding Title}" FontSize="24" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Caption}" Margin="0,2,0,0" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                        <Button Style="{StaticResource CommandButton}" Command="{Binding CopySummaryCommand}" Content="Copy summary" />
+                        <Button Style="{StaticResource CommandButton}" Command="{Binding CopyTranscriptCommand}" Content="Copy transcript" />
+                        <Button Style="{StaticResource CommandButton}" Command="{Binding OpenFolderCommand}" ToolTip="Open this meeting's folder" AutomationProperties.Name="Open folder">
+                            <TextBlock Text="&#xE8B7;" Style="{StaticResource Icon}" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
+
+                <Border Grid.Row="1" Padding="12,8" CornerRadius="6" Margin="0,0,0,8" Background="{DynamicResource SystemFillColorCautionBackgroundBrush}"
+                        Visibility="{Binding Problem, Converter={StaticResource VisibleWhenPresent}}">
+                    <TextBlock Text="{Binding Problem}" TextWrapping="Wrap" />
+                </Border>
+
+                <TabControl Grid.Row="2" SelectedIndex="{Binding SelectedTab}" Background="Transparent" BorderThickness="0">
+                    <TabItem Header="Summary">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,8,8,16">
+                            <Grid MaxWidth="860" HorizontalAlignment="Stretch">
+                                <StackPanel Visibility="{Binding ShowSummary, Converter={StaticResource VisibleWhenTrue}}">
+                                    <Border Padding="12,8" CornerRadius="6" Margin="0,0,0,12" Background="{DynamicResource SystemFillColorCautionBackgroundBrush}"
+                                            Visibility="{Binding RegenerationProblem, Converter={StaticResource VisibleWhenPresent}}">
+                                        <TextBlock Text="{Binding RegenerationProblem}" TextWrapping="Wrap" />
+                                    </Border>
+                                    <Border Style="{StaticResource Card}" Visibility="{Binding Notes.Overview, Converter={StaticResource VisibleWhenPresent}}">
+                                        <TextBox Text="{Binding Notes.Overview, Mode=OneWay}" Style="{StaticResource SelectableText}" FontSize="15" TextBlock.LineHeight="22" />
+                                    </Border>
+                                    <Border Style="{StaticResource Card}" Visibility="{Binding ActionItems, Converter={StaticResource VisibleWhenPresent}}">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding ActionItemsHeading}" Style="{StaticResource SectionHeading}" Margin="0,0,0,12" />
+                                            <ItemsControl ItemsSource="{Binding ActionItems}" ItemTemplate="{StaticResource ActionItemTemplate}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource Card}" Visibility="{Binding Notes.Decisions, Converter={StaticResource VisibleWhenPresent}}">
+                                        <StackPanel>
+                                            <TextBlock Text="Decisions" Style="{StaticResource SectionHeading}" />
+                                            <ItemsControl ItemsSource="{Binding Notes.Decisions}" ItemTemplate="{StaticResource BulletRow}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource Card}" Visibility="{Binding Notes.KeyPoints, Converter={StaticResource VisibleWhenPresent}}">
+                                        <StackPanel>
+                                            <TextBlock Text="Key points" Style="{StaticResource SectionHeading}" />
+                                            <ItemsControl ItemsSource="{Binding Notes.KeyPoints}" ItemTemplate="{StaticResource BulletRow}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding ModelNote}" Style="{StaticResource Caption}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                                        <Button Grid.Column="1" Style="{StaticResource CommandButton}" Command="{Binding GenerateCommand}" Content="Regenerate" />
+                                    </Grid>
+                                </StackPanel>
+                                <!-- Every other state is a message with an optional action. -->
+                                <StackPanel Visibility="{Binding ShowSummary, Converter={StaticResource VisibleWhenFalse}}"
+                                            Margin="0,16,0,0" HorizontalAlignment="Left" MaxWidth="560">
+                                    <TextBlock Text="{Binding SummaryMessage}" Style="{StaticResource PanelMessage}" />
+                                    <ProgressBar Height="4" Margin="0,0,0,12" Value="{Binding ProgressPercent, Mode=OneWay}" IsIndeterminate="{Binding ProgressIsIndeterminate, Mode=OneWay}"
+                                                 Visibility="{Binding ShowProgress, Converter={StaticResource VisibleWhenTrue}}" />
+                                    <Button Command="{Binding GenerateCommand}" Content="{Binding GenerateLabel}" HorizontalAlignment="Left"
+                                            Visibility="{Binding ShowGenerate, Converter={StaticResource VisibleWhenTrue}}" />
+                                    <Button Command="{Binding DownloadModelCommand}" Content="{Binding DownloadLabel}" HorizontalAlignment="Left"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            Visibility="{Binding ShowDownloadButton, Converter={StaticResource VisibleWhenTrue}}" />
+                                    <StackPanel Visibility="{Binding IsDownloadingModel, Converter={StaticResource VisibleWhenTrue}}">
+                                        <ProgressBar Height="4" Margin="0,0,0,8" Value="{Binding ModelDownloadPercent, Mode=OneWay}" />
+                                        <TextBlock Text="{Binding ModelDownloadText}" Style="{StaticResource Caption}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Grid>
+                        </ScrollViewer>
+                    </TabItem>
+                    <TabItem Header="Transcript">
+                        <Grid>
+                            <ListBox x:Name="TranscriptList" ItemsSource="{Binding Lines}" ItemTemplate="{StaticResource TranscriptRowTemplate}"
+                                     SelectionMode="Extended" Background="Transparent" BorderThickness="0" HorizontalContentAlignment="Stretch"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="True"
+                                     VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel"
+                                     Loaded="TranscriptLoaded" AutomationProperties.Name="Transcript">
+                                <ListBox.CommandBindings>
+                                    <CommandBinding Command="Copy" Executed="CopySelectedLines" />
+                                </ListBox.CommandBindings>
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                        <Setter Property="Padding" Value="8,4" />
+                                        <Setter Property="Margin" Value="0" />
+                                        <Setter Property="MinHeight" Value="0" />
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                            </ListBox>
+                            <TextBlock Text="{Binding TranscriptPlaceholder}" Style="{StaticResource PanelMessage}" Margin="4,16" MaxWidth="560" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                       Visibility="{Binding ShowTranscriptPlaceholder, Converter={StaticResource VisibleWhenTrue}}" />
+                            <Button x:Name="JumpToLatest" Content="Jump to latest" Click="JumpToLatestClicked" Visibility="Collapsed"
+                                    HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,12" Style="{StaticResource AccentButtonStyle}" />
+                        </Grid>
+                    </TabItem>
+                </TabControl>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

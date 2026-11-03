@@ -2,6 +2,9 @@
   <Target Name="KeepWindowsX64NativeAssets" BeforeTargets="AssignTargetPaths">
     <ItemGroup>
       <None Remove="$(NuGetPackageRoot)/whisper.net.runtime/$(WhisperVersion)/build/win-arm64/**/*;$(NuGetPackageRoot)/whisper.net.runtime/$(WhisperVersion)/build/win-x86/**/*;$(NuGetPackageRoot)/whisper.net.runtime.noavx/$(WhisperVersion)/build/linux-x64/**/*;$(NuGetPackageRoot)/whisper.net.runtime.noavx/$(WhisperVersion)/build/win-x86/**/*" />
+      <!-- Projects without a runtime identifier otherwise copy every platform's llama.cpp libraries. -->
+      <Content Remove="$(NuGetPackageRoot)/llamasharp.backend.cpu/$(LLamaSharpVersion)/LLamaSharpRuntimes/**/*" Condition="'$(RuntimeIdentifier)' == ''" />
+      <Content Include="$(NuGetPackageRoot)/llamasharp.backend.cpu/$(LLamaSharpVersion)/LLamaSharpRuntimes/win-x64/**/*" Condition="'$(RuntimeIdentifier)' == ''" Link="runtimes/win-x64/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Visible="false" />
     </ItemGroup>
   </Target>
 </Project>

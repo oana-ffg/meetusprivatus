@@ -1,3 +1,53 @@
+# Prototype validation — 2026-11-03
+
+## Desktop app and local summaries — 2026-11-03
+
+Run on a development desktop with synthetic meetings only. No microphone was opened and no private meeting text was used.
+
+**Automated.** Warnings-as-errors build and publication of both executables. 141 tests passed with native checks enabled (real public speech, real output-device playback to text, and the real summary model), and the separate baseline CPU check passed. 
+
+**The real published app, driven through Windows UI Automation against a stand-in worker speaking the real pipe protocol:**
+
+- Start with a nonexistent microphone shows the failure and returns to Start.
+- A second launch exits and leaves the first instance in charge.
+- The app attaches to a running worker, shows live text in order, and Stop moves through finishing to idle.
+- The automatic summary ran with the real model and appeared in the app.
+- A worker starting during a summary ended that process within seconds, and an existing summary stayed unchanged.
+- Closing while recording asks first. No keeps recording; Yes stops the recording and closes.
+
+Two independent code reviews found and this work fixed: closing during startup could leave capture running with no window; an unanswered status request was treated as the recording ending; attaching to a worker still starting stopped status polling; a failed regeneration replaced a good summary; overlapping refreshes could duplicate lines; repeat removal could drop different owners or wording such as enable and disable; changing the destination hid the live meeting; the new readers and the model downloader skipped the reparse-point rule; the merge loop had no termination guarantee; a save location inside the folder updates replace would have been deleted; a recording under another state directory did not block an update; the downloader trusted a wrong resume position and an oversized response; and a failure before a regeneration began was treated as success. The stop-during-startup and closing guards have source review and partial test coverage, but no end-to-end run closing the window during a real startup.
+
+**Summary model evaluation.** Candidates were compared on a synthetic meeting with seven known action items. These are single runs on one invented transcript, so they guided the choice and are not accuracy measurements.
+
+| Setup | Result |
+| --- | --- |
+| Qwen3.5-4B, JSON with grammar constraint | Empty lists or unusable output, and one output that misstated a result |
+| Qwen3.5-2B, JSON with grammar constraint | Two to four items |
+| Gemma 4 E2B | Refused: its chat template is not recognized by llama.cpp's template API at this version |
+| Qwen3.5-4B, line format, reasoning allowed | 3,000-token limit reached in 449 seconds without an answer |
+| Qwen3.5-2B, line format, no reasoning | Four items in 22 seconds, with owners wrong |
+| Qwen3.5-4B, line format, no reasoning | Six of seven in 65 seconds, with correct owners and deadlines |
+
+Three further runs of the chosen setup varied: four or five items, with Playback speakers' tasks sometimes assigned to Me. A prompt rule stating that "I'll" on a Playback line is someone else fixed the owners.
+
+A five-line script in which nobody commits to anything then exposed the opposite failure: the model invented a task for Me, such as "prepare a contingency plan", in every run. Softening the prompt's "meetings usually have several" reduced invented items but lost most real ones, leaving two of seven, so it was restored. A check in code now drops a task assigned to Me when its citation is a question on the Mic or a statement on Playback, with no commitment language in it and none from the Mic speaker within 45 seconds. Five runs of each script afterwards, on the GPU: on the five-line script, no invented item in three runs and one in two, where the model cited a real request addressed to someone else. On the longer script, four runs gave five or six entries covering at least six of the seven real items, and one gave three. One run assigned a task to the wrong person. These are two invented scripts with visible run-to-run variation, not an accuracy measurement: summaries can miss or misstate things.
+
+Through the finished pipeline at three threads, the three-minute meeting took 80 seconds, peaking at about 3.2 GB. A transcript of about 6,800 words, roughly 40 minutes of speech, took 961 seconds over three steps at the same peak. That transcript repeats its topics, which left many reworded items after merging and prompted the repeat removal; the result was not re-measured on it afterwards.
+
+**Privacy observation.** 102 samples across a whole summary run saw no TCP or UDP endpoints on the process, BelowNormal priority throughout, and no network-capable modules loaded. The llama.cpp libraries contain no Winsock, WinHTTP, WinINet, URLMon, or libcurl references. This covers the summarizer and not the full live workflow, which remains an open gate.
+
+**Corrected during this work:**
+
+- Windows PowerShell 5 leaves $PSScriptRoot empty in parameter defaults, which broke download-models.ps1 and test-native.ps1 when run without arguments.
+
+**Command line removed.** The isolated console Ctrl+C check failed on this machine at this point, and on unmodified main too, so this work did not cause it; the cause was not established. It was removed along with the command-line run path it tested.
+
+**Portable update.** scripts/test-updates.ps1 passed with the real buttons: 0.0.1 downloaded 0.0.2 from a local feed, restarted itself on the new version, kept synthetic meetings and the model file, and then reported itself current. Checking against real GitHub Releases is exercised by the first published update, not by this test.
+
+**GPU.** On a mid-range discrete GPU through Vulkan, the transcript of about 6,800 words took 42 seconds against 961 on the CPU, and the three-minute meeting took 60 seconds against about 80. With Vulkan drivers hidden, the summary ran on the CPU and said so. Rerunning after a GPU crash was not exercised with a real driver failure. Integrated GPUs were not tested.
+
+**Not checked:** integrated GPUs; the real on-screen window, including its title bar and backdrop, the live view, and minimum size (windows were rendered off-screen in both themes, and driven through UI Automation without being looked at); real Zoom or Teams calls; real Whisper output through the summarizer; accents; low-powered-laptop duration or memory; real microphone use with the app; the 2.7 GB download through the app's button (the downloader's resume, checksum, and refusal behaviour have tests against a scripted server); recording with screen sharing active.
+
 # Prototype validation — 2026-10-13
 
 ## Capture queue overflow during a transcript stall — 2026-10-14

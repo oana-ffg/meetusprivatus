@@ -13,6 +13,9 @@ TestResults/
 **/local.txt
 **/remote.txt
 **/session.json
+**/summary.json
+**/summary.md
+**/summary.lock
 **/segments/
 **/worker.lock
 **/meetus-owned-audio-v1

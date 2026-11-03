@@ -1,195 +1,101 @@
 using System.Diagnostics;
-using System.Text.Json;
-using NAudio.CoreAudioApi;
 
 namespace Meetu;
 
+// A helper the desktop app starts for work that belongs in its own process. It has no command-line interface:
+// recording stays independent of the window, summaries release their memory, and only the two network commands
+// here ever touch the network, each when the user asks. The recording worker and the app itself stay offline.
 public static class Program
 {
+    public const int UnknownCommandExitCode = 2;
+    public const int UnhandledFailureExitCode = 6;
+
     public static async Task<int> Main(string[] args)
     {
         try
         {
             if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
                 throw new PlatformNotSupportedException("Meetus Privatus requires Windows 11.");
-            if (args.Length == 0 || args[0] is "help" or "--help" or "-h") { PrintHelp(); return 0; }
-            using var installationLease = args[0] is "run" or "start" or "worker" ? AcquireInstallationLease() : null;
+            if (args.Length == 0 || args[0] is not ("worker" or "summarize" or "check-update" or "download-model")) return UnknownCommandExitCode;
             var options = ParseOptions(args[1..]);
             var paths = new StatePaths(options.GetValueOrDefault("state-dir"));
             switch (args[0])
             {
-                case "config":
-                    RequireOptions(options, "state-dir", "output-dir", "model", "vad", "mic", "playback", "threads", "clip-seconds", "max-minutes");
-                    var config = MigrateDefaultOutput(paths, paths.LoadConfig());
-                    config = config with
-                    {
-                        OutputDirectory = options.TryGetValue("output-dir", out var output) ? DefaultableAbsolute(output) : config.OutputDirectory,
-                        ModelPath = options.TryGetValue("model", out var model) ? DefaultableAbsolute(model) : config.ModelPath,
-                        VadPath = options.TryGetValue("vad", out var vad) ? DefaultableAbsolute(vad) : config.VadPath,
-                        MicrophoneId = options.TryGetValue("mic", out var mic) ? (mic == "default" ? null : mic) : config.MicrophoneId,
-                        PlaybackId = options.TryGetValue("playback", out var playback) ? (playback == "default" ? null : playback) : config.PlaybackId,
-                        Threads = IntOption(options, "threads", config.Threads),
-                        ClipSeconds = IntOption(options, "clip-seconds", config.ClipSeconds),
-                        MaxSessionMinutes = IntOption(options, "max-minutes", config.MaxSessionMinutes)
-                    };
-                    config = config.WithMissingDefaultModelsUnpinned();
-                    if (options.Keys.Any(key => key != "state-dir")) { config.Validate(); JsonFiles.Write(paths.ConfigFile, config); }
-                    Console.WriteLine(JsonSerializer.Serialize(config, JsonFiles.Options)); return 0;
-                case "devices":
-                    RequireOptions(options, "state-dir");
-                    using (var enumerator = new MMDeviceEnumerator())
-                        foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.All, DeviceState.Active))
-                        { using (device) Console.WriteLine($"{(device.DataFlow == DataFlow.Capture ? "input" : "output")}\t{device.ID}\t{device.FriendlyName}"); }
-                    return 0;
-                case "start":
-                case "run":
-                {
-                    RequireOptions(options, "state-dir");
-                    if (await ControlServer.RequestAsync(paths) is not null) throw new InvalidOperationException("A recording is already running. Stop it in its existing window before starting another.");
-                    Cleanup(paths);
-                    PrepareConfig(paths);
-                    return args[0] == "run" ? await RunWorkerAsync(paths, interactive: true) : await StartBackgroundAsync(paths);
-                }
-                case "cleanup":
-                    RequireOptions(options, "state-dir");
-                    Cleanup(paths);
-                    Console.WriteLine("Abandoned app-owned audio cleaned; committed transcripts preserved."); return 0;
                 case "worker":
-                    RequireOptions(options, "state-dir");
                     return await RunWorkerAsync(paths);
-                case "stop":
-                case "status":
-                    RequireOptions(options, "state-dir");
-                    var response = await ControlServer.RequestAsync(paths, args[0] == "stop");
-                    if (response is null && File.Exists(paths.StatusFile))
-                    {
-                        response = JsonSerializer.Deserialize<SessionStatus>(File.ReadAllText(paths.StatusFile), JsonFiles.Options);
-                        if (response?.State is "Starting" or "Capturing" or "Finishing")
-                            response = response with { State = "Interrupted", Error = "Worker unavailable. Committed text is preserved; abandoned audio is removed on next start." };
-                    }
-                    Console.WriteLine(JsonSerializer.Serialize(response ?? new SessionStatus("Idle"), JsonFiles.Options));
-                    return response?.State is "Failed" or "Interrupted" ? 1 : 0;
-                case "repair":
-                    RequireOptions(options, "state-dir", "session-dir");
-                    // Text-only repair; never replay audio after a crash.
-                    var sessionDirectory = Path.GetFullPath(options.GetValueOrDefault("session-dir") ?? throw new ArgumentException("repair requires --session-dir."));
-                    LocalPath.Require(sessionDirectory);
-                    if (!File.Exists(Path.Combine(sessionDirectory, "session.json")) || !Directory.Exists(Path.Combine(sessionDirectory, "segments")))
-                        throw new ArgumentException("This is not a recognizable meeting transcript directory.");
-                    // A live worker may still commit to this session; never overwrite its text views.
-                    using (WorkerLock.Acquire(paths)) new TranscriptStore(sessionDirectory).Render();
-                    Console.WriteLine("Text files rebuilt from committed segment records."); return 0;
-                default: throw new ArgumentException("Unknown command. Use meetus help.");
+                case "summarize":
+                    return await SummaryJob.RunAsync(paths, RequireSessionDirectory(options), ParseProcessor(options.GetValueOrDefault("processor")),
+                        progress => Report($"progress {progress.Completed} {progress.Total}"),
+                        () => Environment.Exit(SummaryJob.InterruptedExitCode));
+                case "check-update":
+                    return await CheckForUpdateAsync(options.GetValueOrDefault("update-feed"));
+                default:
+                    return await DownloadSummaryModelAsync();
             }
         }
         catch (Exception exception)
         {
-            Console.Error.WriteLine(exception.Message);
-            if (args.FirstOrDefault() == "run" && !Console.IsInputRedirected)
-            { Console.WriteLine("Press any key to close."); Console.ReadKey(intercept: true); }
-            return 1;
+            Report($"error {exception.Message}");
+            return UnhandledFailureExitCode;
         }
     }
 
-    private static void PrepareConfig(StatePaths paths)
+    private static string RequireSessionDirectory(Dictionary<string, string> options)
     {
-        var saved = paths.LoadConfig();
-        var config = MigrateDefaultOutput(paths, saved.WithMissingDefaultModelsUnpinned());
-        config.Validate();
-        // Also materialize implicit defaults from manually supplied/older minimal settings files.
-        JsonFiles.Write(paths.ConfigFile, config);
+        var directory = Path.GetFullPath(options.GetValueOrDefault("session-dir") ?? throw new ArgumentException("This command requires a session directory."));
+        LocalPath.Require(directory);
+        return MeetingLibrary.IsSessionDirectory(directory) ? directory : throw new ArgumentException("This is not a recognizable meeting transcript directory.");
     }
 
-    // Migrate the previous standard destination, without moving existing text or pinning this install.
-    private static AppConfig MigrateDefaultOutput(StatePaths paths, AppConfig config) =>
-        string.Equals(config.OutputDirectory, Path.Combine(paths.Root, "transcripts"), StringComparison.OrdinalIgnoreCase)
-            ? config with { OutputDirectory = null } : config;
-
-    private static FileStream AcquireInstallationLease()
+    private static SummaryJobProcessor ParseProcessor(string? value) => value switch
     {
-        var leasePath = Path.Combine(AppContext.BaseDirectory, ".update.lock");
-        LocalPath.Require(leasePath);
-        LocalPath.Require(Path.Combine(AppContext.BaseDirectory, ".update-pending"));
-        FileStream lease;
-        try { lease = new FileStream(leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite); }
-        catch (IOException exception) when (exception.HResult == unchecked((int)0x80070020))
-        { throw new InvalidOperationException("An update is in progress. Wait for Update.cmd to finish before recording."); }
-        if (Directory.Exists(Path.Combine(AppContext.BaseDirectory, ".update-pending")))
-        {
-            lease.Dispose();
-            throw new InvalidOperationException("An update was interrupted. Run Update.cmd to restore or finish it before recording.");
-        }
-        return lease;
+        null => SummaryJobProcessor.Configured,
+        "cpu-fallback" => SummaryJobProcessor.CpuAfterGpuFailure,
+        _ => throw new ArgumentException("Unknown summary processor.")
+    };
+
+    // Progress is advisory and content-free. The app reading it may have closed; the work still finishes.
+    private static void Report(string line)
+    {
+        try { Console.WriteLine(line); }
+        catch (IOException) { }
     }
 
-    private static void Cleanup(StatePaths paths)
-    {
-        using var workerLock = WorkerLock.Acquire(paths);
-        ClipWorkspace.CleanupAbandoned(paths.AudioRoot);
-    }
-
-    private static async Task<int> RunWorkerAsync(StatePaths paths, bool interactive = false)
+    private static async Task<int> RunWorkerAsync(StatePaths paths)
     {
         // The handle is held for the worker lifetime, including cleanup and model disposal.
         using var workerLock = WorkerLock.Acquire(paths);
         using var process = Process.GetCurrentProcess();
         process.PriorityClass = ProcessPriorityClass.BelowNormal;
-        void ShowStatus(SessionStatus status)
-        {
-            if (!interactive) return;
-            if (status.State == "Capturing") Console.WriteLine("Recording microphone and output. Press Ctrl+C to stop.");
-            else if (status.State == "Finishing") Console.WriteLine("Capture stopped. Finishing pending text and deleting temporary audio...");
-        }
-        var config = paths.LoadConfig();
-        var session = new CaptureSession(config, paths, ShowStatus);
-        ConsoleCancelEventHandler onCancel = (_, eventArgs) => { eventArgs.Cancel = true; session.Stop(); };
-        if (interactive)
-        {
-            Console.CancelKeyPress += onCancel;
-            Console.WriteLine($"Starting local transcription. Auto-stop after {config.MaxSessionMinutes} minutes; Ctrl+C stops earlier.");
-        }
+        var session = new CaptureSession(paths.LoadConfig(), paths);
         using var cancellation = new CancellationTokenSource();
         var controls = ControlServer.RunAsync(paths, session, cancellation.Token);
         try { await session.RunAsync(); }
         finally
         {
-            cancellation.Cancel(); await controls;
-            if (interactive) Console.CancelKeyPress -= onCancel;
-        }
-        if (interactive)
-        {
-            Console.WriteLine(session.Status.State == "Complete"
-                ? $"Finished. Transcripts: {session.Status.SessionDirectory ?? config.ResolvedOutputDirectory}"
-                : session.Status.Error);
-            if (session.Status.State != "Complete" && !Console.IsInputRedirected)
-            { Console.WriteLine("Press any key to close."); Console.ReadKey(intercept: true); }
+            cancellation.Cancel();
+            await controls;
         }
         return session.Status.State == "Complete" ? 0 : 1;
     }
 
-    private static async Task<int> StartBackgroundAsync(StatePaths paths)
+    private static async Task<int> CheckForUpdateAsync(string? updateFeed)
     {
-        var executable = Environment.ProcessPath ?? throw new InvalidOperationException("Executable path unavailable.");
-        var start = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden };
-        if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
-            start.ArgumentList.Add(typeof(Program).Assembly.Location);
-        foreach (var argument in new[] { "worker", "--state-dir", paths.Root }) start.ArgumentList.Add(argument);
-        using var child = Process.Start(start) ?? throw new InvalidOperationException("Could not start the background worker.");
-        var deadline = Stopwatch.StartNew();
-        while (deadline.Elapsed < TimeSpan.FromSeconds(60))
-        {
-            var current = await ControlServer.RequestAsync(paths);
-            if (current?.State == "Capturing") { Console.WriteLine($"Capturing. Text destination: {current.SessionDirectory}"); return 0; }
-            if (child.HasExited)
-            {
-                var status = File.Exists(paths.StatusFile) ? File.ReadAllText(paths.StatusFile) : "Worker exited before capture started.";
-                Console.Error.WriteLine(status); return 1;
-            }
-            // Requests can now return immediately before the child owns its lock.
-            // Keep startup polling paced even when no controller pipe exists yet.
-            await Task.Delay(200);
-        }
-        Console.Error.WriteLine("Worker is still starting. Use status to check it, or stop to cancel."); return 1;
+        AppUpdates.InitializeProcess();
+        var updates = new AppUpdates(updateFeed);
+        var available = await updates.CheckAndDownloadAsync(percent => Report($"progress {percent} 100"), CancellationToken.None);
+        Report(available is null ? "current" : $"ready {available}");
+        return 0;
+    }
+
+    private static async Task<int> DownloadSummaryModelAsync()
+    {
+        // Always the default location: a custom model the user chose is theirs to manage.
+        var destination = Path.GetDirectoryName(new AppConfig().ResolvedSummaryModelPath)!;
+        using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        await new ModelDownloader(http).DownloadAsync(ModelDownloader.SummaryModel, destination,
+            (received, total) => Report($"progress {received} {total}"), CancellationToken.None);
+        return 0;
     }
 
     public static Dictionary<string, string> ParseOptions(string[] arguments)
@@ -203,32 +109,4 @@ public static class Program
         }
         return options;
     }
-    private static void RequireOptions(Dictionary<string, string> options, params string[] allowed)
-    {
-        if (options.Keys.Any(key => !allowed.Contains(key, StringComparer.Ordinal))) throw new ArgumentException("Unknown option. Use meetus help.");
-    }
-    private static int IntOption(Dictionary<string, string> options, string key, int fallback) => options.TryGetValue(key, out var value)
-        ? int.Parse(value, System.Globalization.CultureInfo.InvariantCulture) : fallback;
-    private static string? DefaultableAbsolute(string value) => value == "default" ? null : Path.GetFullPath(value);
-
-    private static void PrintHelp() => Console.WriteLine("""
-        Meetus Privatus — private, CPU-only meeting transcripts
-
-        config [--output-dir PATH|default] [--model FILE|default] [--vad FILE|default] [--mic ID|default] [--playback ID|default]
-               [--threads 1|2] [--clip-seconds 5..30] [--max-minutes 1..1440]
-        config                     Show saved configuration
-        devices                    List input and output device IDs
-        run                        Record in this console; Ctrl+C stops capture (Start.cmd uses this)
-        start                      Start hidden capture of mic + selected output device
-        status                     Inspect state, backlog, errors, and text destination
-        stop                       Stop capture and finish pending text in the background
-        cleanup                    Remove abandoned owned audio after a crash (refuses a live worker)
-        repair --session-dir PATH  Rebuild text from committed segment records after interruption
-
-        All commands accept --state-dir PATH (default: %LOCALAPPDATA%\MeetusPrivatus).
-        Capture includes mic speech while muted in Zoom/Teams. Use stop to stop the assistant.
-        Playback includes every app on that output device. No Zoom/Teams selection is needed.
-        Capture auto-stops after 60 minutes by default. Pending text finishes afterward.
-        Models must already be local. No runtime downloads, network access, GUI, or live text display.
-        """);
 }
