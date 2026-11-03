@@ -1,4 +1,5 @@
 <Solution>
   <Project Path="src/Meetu/Meetu.csproj" />
+  <Project Path="src/Meetu.App/Meetu.App.csproj" />
   <Project Path="tests/Meetu.Tests/Meetu.Tests.csproj" />
 </Solution>

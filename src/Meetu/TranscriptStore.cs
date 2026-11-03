@@ -8,6 +8,17 @@ public sealed record TranscriptSegment(double StartSeconds, double EndSeconds, s
 public sealed record TranscriptRecord(string Id, AudioSource Source, double StartSeconds, double EndSeconds,
     IReadOnlyList<TranscriptSegment> Segments, string? Gap = null);
 
+public static class TranscriptText
+{
+    public static string Normalize(string text) => string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+    public static string Timestamp(double seconds)
+    {
+        var span = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return $"{(int)span.TotalHours:00}:{span.Minutes:00}:{span.Seconds:00}";
+    }
+}
+
 public sealed class TranscriptStore
 {
     private readonly string recordsDirectory;
@@ -27,11 +38,13 @@ public sealed class TranscriptStore
         recordsDirectory = Path.Combine(directory, "segments");
         PrivateDirectory.Create(recordsDirectory);
         records = System.IO.Directory.EnumerateFiles(recordsDirectory, "*.json")
-            .Select(path => JsonSerializer.Deserialize<TranscriptRecord>(File.ReadAllText(path), JsonFiles.Options)
-                ?? throw new InvalidDataException("Invalid transcript record."))
+            .Select(ReadRecord)
             .ToDictionary(record => record.Id, StringComparer.Ordinal);
         Render();
     }
+
+    public static TranscriptRecord ReadRecord(string path) => JsonSerializer.Deserialize<TranscriptRecord>(File.ReadAllText(path), JsonFiles.Options)
+        ?? throw new InvalidDataException("Invalid transcript record.");
 
     public void Commit(TranscriptRecord record)
     {
@@ -64,21 +77,15 @@ public sealed class TranscriptStore
             .OrderBy(record => record.StartSeconds).ThenBy(record => record.Id, StringComparer.Ordinal))
         {
             if (record.Gap is not null)
-                text.AppendLine($"[{Timestamp(record.StartSeconds)}–{Timestamp(record.EndSeconds)}] [GAP: {record.Gap}]");
+                text.AppendLine($"[{TranscriptText.Timestamp(record.StartSeconds)}–{TranscriptText.Timestamp(record.EndSeconds)}] [GAP: {record.Gap}]");
             foreach (var segment in record.Segments)
             {
-                var clean = string.Join(' ', segment.Text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+                var clean = TranscriptText.Normalize(segment.Text);
                 if (clean.Length > 0)
-                    text.AppendLine($"[{Timestamp(segment.StartSeconds)}–{Timestamp(segment.EndSeconds)}] {clean}");
+                    text.AppendLine($"[{TranscriptText.Timestamp(segment.StartSeconds)}–{TranscriptText.Timestamp(segment.EndSeconds)}] {clean}");
             }
         }
         writeView(Path.Combine(DirectoryPath, source == AudioSource.Local ? "local.txt" : "remote.txt"), text.ToString());
         dirtyViews.Remove(source);
-    }
-
-    private static string Timestamp(double seconds)
-    {
-        var span = TimeSpan.FromSeconds(Math.Max(0, seconds));
-        return $"{(int)span.TotalHours:00}:{span.Minutes:00}:{span.Seconds:00}";
     }
 }

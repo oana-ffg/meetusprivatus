@@ -8,6 +8,27 @@ namespace Meetu;
 public sealed record SessionStatus(string State, string? SessionDirectory = null, long PendingBytes = 0,
     double OldestAudioSeconds = 0, string? Error = null);
 
+// Lifecycle metadata in each session directory. Contains no spoken content.
+public sealed record SessionMetadata(DateTimeOffset StartedUtc, string State)
+{
+    public const string FileName = "session.json";
+    public string? MicrophoneId { get; init; }
+    public string? PlaybackId { get; init; }
+    public int? MaxSessionMinutes { get; init; }
+    public bool AutoSummarize { get; init; }
+    public bool? EstimatedMicrophoneTiming { get; init; }
+    public bool? EstimatedPlaybackTiming { get; init; }
+    public DateTimeOffset? EndedUtc { get; init; }
+    public double? CaptureSeconds { get; init; }
+    public string? Error { get; init; }
+    public object? CaptureDiagnostics { get; init; }
+
+    public static void Write(string sessionDirectory, SessionMetadata metadata) =>
+        JsonFiles.Write(Path.Combine(sessionDirectory, FileName), metadata);
+    public static SessionMetadata Read(string sessionDirectory) =>
+        JsonFiles.Read<SessionMetadata>(Path.Combine(sessionDirectory, FileName));
+}
+
 public sealed class CaptureSession
 {
     private readonly AppConfig config;
@@ -58,6 +79,7 @@ public sealed class CaptureSession
         IClipRecognizer? recognizer = null;
         ISessionAudioCapture? capture = null;
         CaptureDiagnostics? diagnostics = null;
+        SessionMetadata? metadata = null;
         try
         {
             if (stop.Task.IsCompleted) { Update(new SessionStatus("Complete")); return; }
@@ -70,8 +92,10 @@ public sealed class CaptureSession
             var directory = Path.Combine(config.ResolvedOutputDirectory, DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + sessionId);
             transcripts = new TranscriptStore(directory);
             startedUtc = DateTimeOffset.UtcNow;
-            JsonFiles.Write(Path.Combine(directory, "session.json"), new
-            { StartedUtc = startedUtc, State = "Capturing", capture.MicrophoneId, capture.PlaybackId });
+            metadata = new SessionMetadata(startedUtc, "Capturing")
+            { MicrophoneId = capture.MicrophoneId, PlaybackId = capture.PlaybackId,
+                MaxSessionMinutes = config.MaxSessionMinutes, AutoSummarize = config.SummarizeAutomatically };
+            SessionMetadata.Write(directory, metadata);
             var startedTimestamp = Stopwatch.GetTimestamp();
             diagnostics = new CaptureDiagnostics(startedTimestamp);
             var localClock = new CaptureTimeline(startedTimestamp, 100);
@@ -123,9 +147,8 @@ public sealed class CaptureSession
                         captureSeconds, [], "Session incomplete: capture stopped after a failure. Some speech may be missing."));
             }
             Update(Status with { State = error is null ? "Complete" : "Failed", Error = error });
-            JsonFiles.Write(Path.Combine(directory, "session.json"), new
-            { StartedUtc = startedUtc, capture.MicrophoneId, capture.PlaybackId,
-                EstimatedMicrophoneTiming = localClock.UsedEstimatedTiming, EstimatedPlaybackTiming = remoteClock.UsedEstimatedTiming,
+            SessionMetadata.Write(directory, metadata with
+            { EstimatedMicrophoneTiming = localClock.UsedEstimatedTiming, EstimatedPlaybackTiming = remoteClock.UsedEstimatedTiming,
                 State = status.State, EndedUtc = DateTimeOffset.UtcNow, CaptureSeconds = captureSeconds, Error = error,
                 CaptureDiagnostics = diagnostics.Snapshot() });
         }
@@ -149,8 +172,8 @@ public sealed class CaptureSession
             Update(Status with { State = "Failed", Error = error });
             if (transcripts is not null)
             {
-                try { JsonFiles.Write(Path.Combine(transcripts.DirectoryPath, "session.json"), new
-                { StartedUtc = startedUtc, State = "Failed", EndedUtc = DateTimeOffset.UtcNow, CaptureSeconds = captureSeconds, Error = error,
+                try { SessionMetadata.Write(transcripts.DirectoryPath, (metadata ?? new SessionMetadata(startedUtc, "Failed")) with
+                { State = "Failed", EndedUtc = DateTimeOffset.UtcNow, CaptureSeconds = captureSeconds, Error = error,
                     CaptureDiagnostics = diagnostics?.Snapshot() }); }
                 catch { /* An unavailable destination is already reported in status. */ }
             }

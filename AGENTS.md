@@ -4,14 +4,14 @@
 
 Meetus Privatus is an MIT-licensed Windows 11 local meeting transcriber for Zoom/Teams desktop apps. Communicate in English, work autonomously within authorization, and state uncertainty clearly. Read REQUIREMENTS.md and SPEC.md before changing behavior.
 
-- The running app must make no outbound calls, uploads, telemetry, automatic downloads/updates, cloud inference, or crash reporting. Do not add an HTTP server.
-- Explicit setup scripts may fetch public models with pinned revisions and integrity checks; offline import must work. Reject network paths and reparse-point ancestors before application filesystem access. Development may research public docs, never send private meeting content externally.
-- Use Whisper base.en and CPU runtimes. Prioritize low-powered-laptop webcam/screen-share responsiveness. No speculative unused engines or GPU requirement.
+- The running app and recording worker must make no outbound calls, uploads, telemetry, automatic downloads/updates, cloud inference, or crash reporting. Do not add an HTTP server. Only an explicit user action may reach the network, in a separate helper process that reads no meeting content: downloading a public model or checking for updates.
+- Public models use pinned revisions and integrity checks; offline import must work. Reject network paths and reparse-point ancestors before application filesystem access. Development may research public docs, never send private meeting content externally.
+- Use Whisper base.en on CPU runtimes. Summaries use a local LLM only, on the CPU by default, with an optional GPU setting and CPU fallback. Prioritize low-powered-laptop webcam/screen-share responsiveness. No speculative unused engines or GPU requirement.
 - Capture configured mic speech throughout an active session, **including while muted in Zoom/Teams**. Label notes to self honestly; do not add app-mute tracking. Assistant stop controls its own capture.
 - Capture all playback on the selected output device, independently of Zoom/Teams processes. Default to the Windows output device; allow explicit endpoint configuration. Do not silently switch devices during a session. Label playback honestly, including other apps' audio, without invented identities.
 - Baseline: headphones on a monitor audio jack, laptop built-in mic. No headset requirement or costly echo processing without evidence.
-- Minimize user effort: double-click Start.cmd, Ctrl+C to stop early, no typed startup/shutdown or required configuration. The status console must not display live text. Default output is local and automatic. No sign-in startup or GUI; automatic meeting detection and individual-speaker diarization are deferred bonuses.
-- Auto-stop capture after 60 minutes by default; duration is configurable. Ctrl+C and timed stop end capture and drain queued transcription before deleting processed clips, under the existing retention/failure limits. Do not interpret Ctrl+C as abandoning the backlog or terminating the process immediately.
+- Minimize user effort: a Windows desktop app to start, stop, follow live text, read the summary with action items, and view prior meetings. No typed commands or required configuration. Default output is local and automatic. No sign-in startup; automatic meeting detection and individual-speaker diarization are deferred bonuses.
+- Auto-stop capture after 60 minutes by default; duration is configurable. Stop and timed stop end capture and drain queued transcription before deleting processed clips, under the existing retention/failure limits. Do not interpret them as abandoning the backlog or terminating the process immediately.
 - Short clips are allowed, maximum 30 seconds. Delete processed audio promptly. Both sources share the one-hour pending timeline and documented byte cap.
 - Confirmed overload policy: stop capture, preserve committed text, and mark gaps. Give each clip a cancellation deadline and delete only expiring audio; let newer queued speech finish within its own bounds. No silent retention/resource escalation or auto-restart.
 - Cleanup holds the worker lock, verifies owned workspaces, skips links, and preserves unfamiliar/user files and text. Never sweep shared temp storage.
@@ -32,7 +32,7 @@ Meetus Privatus is an MIT-licensed Windows 11 local meeting transcriber for Zoom
 
 ## Validation
 
-- Run scripts/build.ps1 for warnings-as-errors build and behavioral checks; -Publish verifies publication. Never conceal failures.
+- Run scripts/build.ps1 for warnings-as-errors build and behavioral checks; -Publish verifies publication. Run scripts/test-updates.ps1 when packaging or updates change. Never conceal failures.
 - Run scripts/test-native.ps1 when capture/recognition/native packaging changes. It uses a hash-pinned public fixture and quiet public playback, **never the mic**. It can download the public fixture during explicit setup; cached recognition stays local.
 - Native checks cover output-device playback-to-text/audio deletion, endpoint selection, speech/silence/cancellation, and baseline CPU in a separate process. Refuse unrelated active playback before or during the public capture check. Do not call these live-client or weak-laptop acceptance.
 - Live gates: real Zoom/Teams, app-muted notes, actual routing/overlap, device/client failures, sustained webcam/screen share, low-powered-laptop budgets, and named accents.

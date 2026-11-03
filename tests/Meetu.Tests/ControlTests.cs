@@ -55,31 +55,21 @@ public sealed class ControlTests(ITestOutputHelper output)
         Assert.True(WorkerLock.IsHeld(paths));
     }
 
-    [Theory]
-    [InlineData("status")]
-    [InlineData("stop")]
-    public async Task CrashedWorkerStillReportsInterruptedWithoutWaiting(string command)
+    [Fact]
+    public async Task CrashedWorkerReportsInterruptedWithoutWaiting()
     {
         using var directory = new TestDirectory();
         var paths = new StatePaths(Path.Combine(directory.Path, "state"));
         using (WorkerLock.Acquire(paths)) { } // A crash leaves the file, not the OS-held lock.
         JsonFiles.Write(paths.StatusFile, new SessionStatus("Capturing", directory.Path, 32000, 1));
-        using var reply = new StringWriter();
-        var previousOutput = Console.Out;
         var elapsed = Stopwatch.StartNew();
-        try
-        {
-            Console.SetOut(reply);
-            Assert.Equal(1, await Program.Main([command, "--state-dir", paths.Root]));
-        }
-        finally { elapsed.Stop(); Console.SetOut(previousOutput); }
-        var status = JsonSerializer.Deserialize<SessionStatus>(reply.ToString(), JsonFiles.Options)!;
+        var status = RecordingControl.ReadStatus(await ControlServer.RequestAsync(paths), paths);
+        elapsed.Stop();
         Assert.Equal("Interrupted", status.State);
         Assert.Equal(directory.Path, status.SessionDirectory);
         Assert.Equal(32000, status.PendingBytes);
         Assert.Contains("Worker unavailable", status.Error);
-        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(1),
-            $"Crashed-worker {command} took {elapsed.Elapsed.TotalMilliseconds:F3} ms.");
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(1), $"Crashed-worker status took {elapsed.Elapsed.TotalMilliseconds:F3} ms.");
     }
 
     [Fact]
@@ -91,7 +81,7 @@ public sealed class ControlTests(ITestOutputHelper output)
         {
             Assert.True(WorkerLock.IsHeld(paths));
             Assert.Throws<InvalidOperationException>(() => WorkerLock.Acquire(paths));
-            Assert.Equal(1, await Program.Main(["start", "--state-dir", paths.Root]));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => RecordingControl.PrepareStartAsync(paths));
             Assert.False(File.Exists(paths.ConfigFile));
             Assert.False(Directory.Exists(paths.AudioRoot));
             Assert.True(WorkerLock.IsHeld(paths));
@@ -111,7 +101,7 @@ public sealed class ControlTests(ITestOutputHelper output)
         var missingModel = Path.Combine(directory.Path, "missing-synthetic-model.bin");
         JsonFiles.Write(paths.ConfigFile, new AppConfig { ModelPath = missingModel, VadPath = missingModel });
         var elapsed = Stopwatch.StartNew();
-        Assert.Equal(1, await Program.Main(["start", "--state-dir", paths.Root]));
+        await Assert.ThrowsAsync<ArgumentException>(() => RecordingControl.PrepareStartAsync(paths));
         elapsed.Stop();
         Assert.False(File.Exists(paths.StatusFile));
         Assert.Empty(Directory.GetDirectories(paths.AudioRoot));
@@ -166,92 +156,61 @@ public sealed class ControlTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public async Task SavedConfigurationSurvivesCliRestartAndRepairRejectsAnUnrelatedDirectory()
+    public async Task StartingSavesDefaultsWithoutPinningTheInstallLocation()
     {
         using var directory = new TestDirectory();
         var paths = new StatePaths(Path.Combine(directory.Path, "state"));
         var model = Path.Combine(directory.Path, "invalid-model-fixture.bin"); File.WriteAllBytes(model, [0]);
-        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--output-dir", directory.Path, "--model", model, "--vad", model, "--playback", "configured-output", "--max-minutes", "45"]));
-        Assert.Equal(directory.Path, new StatePaths(paths.Root).LoadConfig().OutputDirectory);
-        Assert.Equal("configured-output", new StatePaths(paths.Root).LoadConfig().PlaybackId);
-        Assert.Equal(45, paths.LoadConfig().MaxSessionMinutes);
-        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--playback", "default"]));
-        Assert.Null(paths.LoadConfig().PlaybackId);
-        var unrelated = Path.Combine(directory.Path, "unrelated"); Directory.CreateDirectory(unrelated);
-        var text = Path.Combine(unrelated, "local.txt"); File.WriteAllText(text, "preserve existing user file");
-        Assert.Equal(1, await Program.Main(["repair", "--state-dir", paths.Root, "--session-dir", unrelated]));
-        Assert.Equal("preserve existing user file", File.ReadAllText(text));
-    }
-
-    [Fact]
-    public async Task FirstConfigurationSavesDefaultOutputWithoutPinningTheInstallLocation()
-    {
-        using var directory = new TestDirectory();
-        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
-        var model = Path.Combine(directory.Path, "invalid-model-fixture.bin"); File.WriteAllBytes(model, [0]);
-        // Device setup can precede the first recording; it must not require choosing an output directory.
-        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--model", model, "--vad", model, "--mic", "configured-input"]));
+        JsonFiles.Write(paths.ConfigFile, new AppConfig { ModelPath = model, VadPath = model, MicrophoneId = "configured-input" });
+        await RecordingControl.PrepareStartAsync(paths);
         var saved = paths.LoadConfig();
         Assert.Null(saved.OutputDirectory);
-        Assert.Equal(Path.Combine(AppContext.BaseDirectory, "transcripts"), saved.ResolvedOutputDirectory);
+        Assert.Equal(Path.Combine(AppPaths.DurableRoot, "transcripts"), saved.ResolvedOutputDirectory);
         Assert.Equal("configured-input", saved.MicrophoneId);
         // Unset model paths stay unset in saved settings, so a moved or upgraded app finds its own models.
-        var defaults = new AppConfig { OutputDirectory = saved.OutputDirectory };
+        var defaults = new AppConfig();
         Assert.Equal(Path.Combine(AppContext.BaseDirectory, "models", "ggml-base.en-q5_1.bin"), defaults.ResolvedModelPath);
         Assert.Equal(Path.Combine(AppContext.BaseDirectory, "models", "ggml-silero-v5.1.2.bin"), defaults.ResolvedVadPath);
-        var json = System.Text.Json.JsonSerializer.Serialize(defaults, JsonFiles.Options);
+        var json = JsonSerializer.Serialize(defaults, JsonFiles.Options);
         Assert.DoesNotContain("ggml", json);
-        Assert.Null(System.Text.Json.JsonSerializer.Deserialize<AppConfig>(json, JsonFiles.Options)!.ModelPath);
+        Assert.Null(JsonSerializer.Deserialize<AppConfig>(json, JsonFiles.Options)!.ModelPath);
     }
 
     [Fact]
-    public async Task LegacyDefaultOutputMigratesButCustomDestinationAndOldTextSurvive()
+    public void LegacyDefaultOutputMigratesButCustomDestinationSurvives()
     {
         using var directory = new TestDirectory();
         var paths = new StatePaths(Path.Combine(directory.Path, "state"));
         var legacy = Path.Combine(paths.Root, "transcripts");
-        Directory.CreateDirectory(legacy);
-        var text = Path.Combine(legacy, "existing.txt"); File.WriteAllText(text, "keep this text");
-        var model = Path.Combine(directory.Path, "synthetic-model.bin"); File.WriteAllBytes(model, [0]);
-        JsonFiles.Write(paths.ConfigFile, new AppConfig { OutputDirectory = legacy, ModelPath = model, VadPath = model });
-        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--max-minutes", "45"]));
-        Assert.Null(paths.LoadConfig().OutputDirectory);
-        Assert.Equal("keep this text", File.ReadAllText(text));
-        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--output-dir", directory.Path]));
-        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--max-minutes", "60"]));
-        Assert.Equal(directory.Path, paths.LoadConfig().OutputDirectory);
-        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--output-dir", "default"]));
-        Assert.Null(paths.LoadConfig().OutputDirectory);
-        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--output-dir", legacy]));
-        Assert.Equal(legacy, paths.LoadConfig().OutputDirectory);
+        Assert.Null(RecordingControl.MigrateDefaultOutput(paths, new AppConfig { OutputDirectory = legacy }).OutputDirectory);
+        Assert.Equal(directory.Path, RecordingControl.MigrateDefaultOutput(paths, new AppConfig { OutputDirectory = directory.Path }).OutputDirectory);
     }
 
-    [Fact]
-    public async Task RecordingRefusesAnInstallationUnderUpdateBeforeOpeningAudio()
+    [Theory]
+    [InlineData(@"C:\apps\Meetus\current", @"C:\apps\Meetus", true)]
+    [InlineData(@"C:\apps\Meetus\current\", @"C:\apps\Meetus", true)]
+    [InlineData(@"C:\apps\Meetus\current", @"C:\apps\Meetus\current", false)]
+    [InlineData(@"C:\dev\publish", @"C:\dev\publish", false)]
+    public void TextAndLargeModelsLiveOutsideTheFolderUpdatesReplace(string program, string expected, bool hasUpdater)
     {
-        using var updateLock = new FileStream(Path.Combine(AppContext.BaseDirectory, ".update.lock"),
-            FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        // Run against a real temporary tree so the check for the updater is the real one.
         using var directory = new TestDirectory();
-        Assert.Equal(1, await Program.Main(["start", "--state-dir", directory.Path]));
-        Assert.False(File.Exists(Path.Combine(directory.Path, "config.json")));
-        Assert.False(Directory.Exists(Path.Combine(directory.Path, "audio")));
+        var relative = program[3..];
+        var programDirectory = Path.Combine(directory.Path, relative);
+        Directory.CreateDirectory(programDirectory);
+        var parent = Path.GetDirectoryName(programDirectory.TrimEnd(Path.DirectorySeparatorChar))!;
+        if (hasUpdater) File.WriteAllBytes(Path.Combine(parent, "Update.exe"), [0]);
+        Assert.Equal(Path.Combine(directory.Path, expected[3..]), AppPaths.ResolveDurableRoot(programDirectory));
     }
 
-    [Fact]
-    public async Task RepairRefusesASessionWhileAWorkerHoldsTheLock()
-    {
-        using var directory = new TestDirectory();
-        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
-        var store = new TranscriptStore(Path.Combine(directory.Path, "session"));
-        File.WriteAllText(Path.Combine(store.DirectoryPath, "session.json"), "{}");
-        var local = Path.Combine(store.DirectoryPath, "local.txt");
-        File.WriteAllText(local, "text a live worker is still writing");
-        using (new FileStream(Path.Combine(paths.Root, "worker.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
-            Assert.Equal(1, await Program.Main(["repair", "--state-dir", paths.Root, "--session-dir", store.DirectoryPath]));
-        Assert.Equal("text a live worker is still writing", File.ReadAllText(local));
-        Assert.Equal(0, await Program.Main(["repair", "--state-dir", paths.Root, "--session-dir", store.DirectoryPath]));
-        Assert.Contains("Microphone speech", File.ReadAllText(local));
-    }
+    [Theory]
+    [InlineData]
+    [InlineData("run")]
+    [InlineData("start")]
+    [InlineData("status")]
+    [InlineData("config")]
+    public async Task TheFormerCommandLineIsGone(params string[] arguments) =>
+        Assert.Equal(Program.UnknownCommandExitCode, await Program.Main(arguments));
 
     [Fact]
     public void MissingPinnedDefaultModelsFollowTheAppButOtherChoicesAreKept()
@@ -270,12 +229,11 @@ public sealed class ControlTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public async Task UnavailableLegacyDriveIsResetWithoutAccessingItsFiles()
+    public void UnavailableLegacyDriveIsResetWithoutAccessingItsFiles()
     {
         using var directory = new TestDirectory();
         var root = Enumerable.Range('D', 'Z' - 'D' + 1).Select(letter => $"{(char)letter}:\\")
             .First(path => new DriveInfo(path).DriveType is DriveType.Unknown or DriveType.NoRootDirectory);
-        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
         var saved = new AppConfig
         {
             ModelPath = Path.Combine(root, "old-install", "models", "ggml-base.en-q5_1.bin"),
@@ -283,54 +241,9 @@ public sealed class ControlTests(ITestOutputHelper output)
         };
         var migrated = saved.WithMissingDefaultModelsUnpinned();
         Assert.Null(migrated.ModelPath); Assert.Null(migrated.VadPath);
-        JsonFiles.Write(paths.ConfigFile, saved);
-        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root]));
         var custom = Path.Combine(root, "chosen", "ggml-base.en.bin");
         Assert.Equal(custom, (saved with { ModelPath = custom }).WithMissingDefaultModelsUnpinned().ModelPath);
         Assert.Throws<ArgumentException>(() => (saved with
         { ModelPath = @"\\network.invalid\models\ggml-base.en-q5_1.bin" }).WithMissingDefaultModelsUnpinned());
-    }
-
-    [Fact]
-    public async Task ExplicitModelOverridesAreAppliedBeforeLegacyPathValidation()
-    {
-        using var directory = new TestDirectory();
-        var paths = new StatePaths(Path.Combine(directory.Path, "state"));
-        var model = Path.Combine(directory.Path, "synthetic-model.bin"); File.WriteAllBytes(model, [0]);
-        JsonFiles.Write(paths.ConfigFile, new AppConfig
-        {
-            ModelPath = @"\\network.invalid\models\ggml-base.en-q5_1.bin",
-            VadPath = @"\\network.invalid\models\ggml-silero-v5.1.2.bin"
-        });
-        Assert.Equal(0, await Program.Main(["config", "--state-dir", paths.Root, "--model", model, "--vad", model]));
-        Assert.Equal(model, paths.LoadConfig().ModelPath); Assert.Equal(model, paths.LoadConfig().VadPath);
-        // A default override must reach bundled-model validation, even with an invalid saved path.
-        var config = paths.LoadConfig() with { ModelPath = @"\\network.invalid\models\ggml-base.en-q5_1.bin" };
-        JsonFiles.Write(paths.ConfigFile, config);
-        using var errors = new StringWriter();
-        var previous = Console.Error;
-        try
-        {
-            Console.SetError(errors);
-            var result = await Program.Main(["config", "--state-dir", paths.Root, "--model", "default"]);
-            Assert.DoesNotContain("network", errors.ToString(), StringComparison.OrdinalIgnoreCase);
-            if (File.Exists(new AppConfig().ResolvedModelPath)) Assert.Equal(0, result);
-            else Assert.Contains("Whisper model missing", errors.ToString());
-        }
-        finally { Console.SetError(previous); }
-    }
-
-    [Fact]
-    public async Task RemovedProcessOptionsFailBeforeStartingCapture()
-    {
-        using var directory = new TestDirectory();
-        foreach (var arguments in new[]
-        {
-            new[] { "start", "--app", "teams" }, new[] { "start", "--pid", "1" },
-            new[] { "worker", "--pid", "1" }, new[] { "processes" }
-        })
-            Assert.Equal(1, await Program.Main([.. arguments, "--state-dir", directory.Path]));
-        Assert.False(Directory.Exists(Path.Combine(directory.Path, "audio")));
-        Assert.False(File.Exists(Path.Combine(directory.Path, "status.json")));
     }
 }

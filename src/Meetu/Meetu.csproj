@@ -1,15 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>meetus</AssemblyName>
     <RootNamespace>Meetu</RootNamespace>
-    <Version>0.1.0-preview.4</Version>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="LLamaSharp" Version="$(LLamaSharpVersion)" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="$(LLamaSharpVersion)" />
+    <PackageReference Include="LLamaSharp.Backend.Vulkan.Windows" Version="$(LLamaSharpVersion)" />
     <PackageReference Include="NAudio.Wasapi" Version="3.1.0" />
+    <PackageReference Include="Velopack" Version="$(VelopackVersion)" />
     <PackageReference Include="Whisper.net" Version="$(WhisperVersion)" />
     <PackageReference Include="Whisper.net.Runtime" Version="$(WhisperVersion)" />
     <PackageReference Include="Whisper.net.Runtime.NoAvx" Version="$(WhisperVersion)" />

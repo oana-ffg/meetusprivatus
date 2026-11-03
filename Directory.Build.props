@@ -7,7 +7,11 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <Deterministic>true</Deterministic>
     <PathMap>$(MSBuildThisFileDirectory)=/_/</PathMap>
+    <!-- Scripts read the release version from here. -->
+    <Version>0.2.0-preview.1</Version>
     <WhisperVersion>1.9.1</WhisperVersion>
+    <LLamaSharpVersion>0.30.0</LLamaSharpVersion>
+    <VelopackVersion>1.2.161</VelopackVersion>
     <!-- AssemblyInfo declares Windows 11; the generic Windows TFM otherwise advertises Windows 7. -->
     <GenerateSupportedOSPlatformAttribute>false</GenerateSupportedOSPlatformAttribute>
   </PropertyGroup>
