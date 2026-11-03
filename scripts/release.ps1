@@ -27,8 +27,9 @@ if ($Models) { $packageArguments.Models = $Models }
 $assets = @(Get-ChildItem -LiteralPath $output -File | Where-Object Extension -in '.zip', '.nupkg', '.json' | ForEach-Object FullName)
 if ($assets.Count -lt 3) { throw 'The portable ZIP, full package, and release metadata are required.' }
 # Previews stay marked as pre-releases. The updater includes them; live acceptance gates remain open until a stable version.
-$prerelease = if ($version -match '-') { @('--prerelease') } else { @() }
-gh release create "v$version" @assets --repo $repository --target $commit --title "Meetus Privatus $version" --notes-file $notesPath --draft @prerelease
+$createArguments = @('release', 'create', "v$version") + $assets + @('--repo', $repository, '--target', $commit, '--title', "Meetus Privatus $version", '--notes-file', $notesPath, '--draft')
+if ($version -match '-') { $createArguments += '--prerelease' }
+& gh @createArguments
 if ($LASTEXITCODE -ne 0) { throw 'Creating the draft release failed. Inspect GitHub before retrying.' }
 gh release edit "v$version" --repo $repository --draft=false
 if ($LASTEXITCODE -ne 0) { throw 'The release remains a draft. Inspect its assets before publishing.' }
