@@ -77,7 +77,7 @@ public sealed class SettingsViewModel : Observable
 
     public IReadOnlyList<SpeechModelChoice> SpeechModelChoices { get; }
     public bool IsSpeechModelSetup => original.NeedsSpeechModelSelection;
-    public string? CustomSpeechModelNote => original.ModelPath is { } path && chosenSpeechModel is null
+    public string? CustomSpeechModelNote => !IsSpeechModelSetup && original.ModelPath is { } path && chosenSpeechModel is null
         ? $"Using a specific Whisper file set in the configuration: {path}. Choosing a model here replaces it." : null;
 
     public SpeechModel? ChosenSpeechModel

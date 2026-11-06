@@ -10,6 +10,8 @@ Real Zoom/Teams, target-laptop, accent, and full-worker acceptance limits below 
 
 The real portable updater passed an isolated two-version update against a local feed, preserving synthetic meetings and downloaded models. After restart it showed the model guide with recording disabled and all four radios unselected; selecting the included Whisper base.en and saving enabled recording. Closing and reopening preserved that selection without repeating setup. No microphone was opened. Two earlier attempts exposed test-selector issues (PowerShell 5.1's handling of a Unicode button name, and a text heading matched instead of the dialog); the corrected full script passed and closed both app launches.
 
+A final cross-harness review approved the explicit-selection implementation and repository guidance. Its low-severity wording finding was fixed: setup no longer says a legacy Whisper path is in use while recording is blocked, and the configuration comment now describes when that override applies. Behavioral coverage includes this case and the ability to stop an existing worker before a model has been chosen.
+
 ## Selectable transcription models and meeting deletion
 
 Run on a development desktop with public recordings and invented meetings. No microphone was opened, and no recording was made with Parakeet, tiny.en, or small.en through a real worker.

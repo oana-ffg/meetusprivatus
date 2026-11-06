@@ -44,7 +44,8 @@ public sealed record AppConfig
     public string? OutputDirectory { get; init; }
     // Missing in earlier previews: ask the user instead of silently choosing the former default.
     public string? SpeechModelId { get; init; }
-    // A specific Whisper file, set only in config.json or by earlier previews. It wins until a model is chosen in Settings.
+    // A specific Whisper file set in config.json or by earlier previews. With a confirmed model ID it overrides
+    // the catalog assets until a model is chosen in Settings; earlier configs still require model setup.
     public string? ModelPath { get; init; }
     // Null selects the models folder beside the executable, so saved settings survive moving or upgrading the app.
     public string? VadPath { get; init; }

@@ -371,6 +371,7 @@ public sealed class AppWindowTests
 
             var settings = new SettingsViewModel(fixture.Paths, viewModel.SpeechModels);
             Assert.True(settings.IsSpeechModelSetup);
+            Assert.Null(settings.CustomSpeechModelNote);
             Assert.All(settings.SpeechModelChoices, choice => Assert.False(choice.IsChosen));
             Assert.False(settings.TrySave());
             Assert.Contains("Choose a transcription model", settings.Error);
