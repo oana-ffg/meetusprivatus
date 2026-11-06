@@ -20,6 +20,9 @@ $env:MEETUS_FIXTURE = $fixture
 # Optional large file, fetched by the app's download button. Without it, that one check is reported as skipped.
 $summaryModel = Join-Path ([IO.Path]::GetFullPath($Models)) 'Qwen3.5-4B-Q4_K_M.gguf'
 if (Test-Path -LiteralPath $summaryModel) { $env:MEETUS_SUMMARY_MODEL = $summaryModel }
+# Also optional: without it, the Parakeet check is reported as skipped.
+$parakeetModel = Join-Path ([IO.Path]::GetFullPath($Models)) 'parakeet-tdt-0.6b-v3-int8'
+if (Test-Path -LiteralPath $parakeetModel) { $env:MEETUS_PARAKEET_MODEL = $parakeetModel }
 try {
     & (Join-Path $PSScriptRoot 'build.ps1') -Publish
     if ($LASTEXITCODE -ne 0) { throw 'Native checks failed.' }
@@ -33,5 +36,5 @@ try {
         if ($LASTEXITCODE -ne 0) { Write-Warning 'The GPU summary check failed on this machine.' }
     }
 } finally {
-    Remove-Item Env:MEETUS_NATIVE_TESTS, Env:MEETUS_BASELINE_TESTS, Env:MEETUS_MODELS, Env:MEETUS_FIXTURE, Env:MEETUS_SUMMARY_MODEL, Env:MEETUS_SUMMARY_GPU -ErrorAction SilentlyContinue
+    Remove-Item Env:MEETUS_NATIVE_TESTS, Env:MEETUS_BASELINE_TESTS, Env:MEETUS_MODELS, Env:MEETUS_FIXTURE, Env:MEETUS_SUMMARY_MODEL, Env:MEETUS_SUMMARY_GPU, Env:MEETUS_PARAKEET_MODEL -ErrorAction SilentlyContinue
 }

@@ -15,6 +15,7 @@ public sealed record SessionMetadata(DateTimeOffset StartedUtc, string State)
     public string? MicrophoneId { get; init; }
     public string? PlaybackId { get; init; }
     public int? MaxSessionMinutes { get; init; }
+    public string? SpeechModel { get; init; }
     public bool AutoSummarize { get; init; }
     public bool? EstimatedMicrophoneTiming { get; init; }
     public bool? EstimatedPlaybackTiming { get; init; }
@@ -94,7 +95,8 @@ public sealed class CaptureSession
             startedUtc = DateTimeOffset.UtcNow;
             metadata = new SessionMetadata(startedUtc, "Capturing")
             { MicrophoneId = capture.MicrophoneId, PlaybackId = capture.PlaybackId,
-                MaxSessionMinutes = config.MaxSessionMinutes, AutoSummarize = config.SummarizeAutomatically };
+                MaxSessionMinutes = config.MaxSessionMinutes, SpeechModel = config.SelectedSpeechModel?.Name ?? Path.GetFileName(config.ResolvedModelPath),
+                AutoSummarize = config.SummarizeAutomatically };
             SessionMetadata.Write(directory, metadata);
             var startedTimestamp = Stopwatch.GetTimestamp();
             diagnostics = new CaptureDiagnostics(startedTimestamp);

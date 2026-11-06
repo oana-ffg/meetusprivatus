@@ -13,6 +13,11 @@ public partial class SettingsWindow : Window
         this.viewModel = viewModel;
         DataContext = viewModel;
         InitializeComponent();
+        if (viewModel.IsSpeechModelSetup)
+        {
+            Title = "Choose a transcription model";
+            Loaded += (_, _) => SettingsScroller.ScrollToVerticalOffset(TranscriptionHeading.TranslatePoint(new Point(), SettingsScroller.Content as UIElement).Y);
+        }
     }
 
     private void ChooseFolder(object sender, RoutedEventArgs e)
@@ -28,6 +33,13 @@ public partial class SettingsWindow : Window
     }
 
     private void UseDefaultModel(object sender, RoutedEventArgs e) => viewModel.ChooseSummaryModel(null);
+
+    private async void DeleteSpeechModel(object sender, RoutedEventArgs e)
+    {
+        var row = ((SpeechModelChoice)((FrameworkElement)sender).DataContext).Row;
+        var answer = MessageBox.Show(this, viewModel.DeleteConfirmation(row), "Delete model", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
+        if (answer == MessageBoxResult.Yes) await viewModel.DeleteSpeechModelAsync(row);
+    }
 
     private void Save(object sender, RoutedEventArgs e)
     {

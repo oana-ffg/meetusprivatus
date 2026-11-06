@@ -4,10 +4,26 @@ namespace Meetu.App.ViewModels;
 
 public sealed record DeviceOption(string? Id, string Name);
 
+// A row in Settings: the model itself, and whether this unsaved form has it selected.
+public sealed class SpeechModelChoice(SpeechModelRow row, SettingsViewModel settings) : Observable
+{
+    public SpeechModelRow Row { get; } = row;
+
+    public bool IsChosen
+    {
+        get => settings.ChosenSpeechModel == Row.Model;
+        set { if (value) settings.ChosenSpeechModel = Row.Model; }
+    }
+
+    internal void Refresh() => Raise(nameof(IsChosen));
+}
+
 public sealed class SettingsViewModel : Observable
 {
     private readonly StatePaths paths;
     private readonly AppConfig original;
+    private readonly SpeechModelsViewModel speechModels;
+    private SpeechModel? chosenSpeechModel;
     private DeviceOption? microphone;
     private DeviceOption? playback;
     private int maxMinutes;
@@ -18,10 +34,14 @@ public sealed class SettingsViewModel : Observable
     private bool hideFromScreenSharing;
     private string? error;
 
-    public SettingsViewModel(StatePaths paths)
+    public SettingsViewModel(StatePaths paths, SpeechModelsViewModel speechModels)
     {
         this.paths = paths;
+        this.speechModels = speechModels;
         original = paths.LoadConfig();
+        chosenSpeechModel = original.SelectedSpeechModel;
+        speechModels.Refresh();
+        SpeechModelChoices = speechModels.Rows.Select(row => new SpeechModelChoice(row, this)).ToList();
         maxMinutes = original.MaxSessionMinutes;
         outputDirectory = original.OutputDirectory;
         summaryModelPath = original.SummaryModelPath;
@@ -55,6 +75,22 @@ public sealed class SettingsViewModel : Observable
         return options;
     }
 
+    public IReadOnlyList<SpeechModelChoice> SpeechModelChoices { get; }
+    public bool IsSpeechModelSetup => original.NeedsSpeechModelSelection;
+    public string? CustomSpeechModelNote => !IsSpeechModelSetup && original.ModelPath is { } path && chosenSpeechModel is null
+        ? $"Using a specific Whisper file set in the configuration: {path}. Choosing a model here replaces it." : null;
+
+    public SpeechModel? ChosenSpeechModel
+    {
+        get => chosenSpeechModel;
+        internal set
+        {
+            chosenSpeechModel = value;
+            foreach (var choice in SpeechModelChoices) choice.Refresh();
+            Raise(nameof(CustomSpeechModelNote));
+        }
+    }
+
     public IReadOnlyList<DeviceOption> Microphones { get; }
     public IReadOnlyList<DeviceOption> Playbacks { get; }
     public DeviceOption? Microphone { get => microphone; set => Set(ref microphone, value); }
@@ -80,19 +116,42 @@ public sealed class SettingsViewModel : Observable
         Raise(nameof(SummaryModelText));
     }
 
+    public string DeleteConfirmation(SpeechModelRow row) =>
+        $"Delete {row.Name}? It can be downloaded again later. Meetings it already transcribed are not affected.";
+
+    // The next recording needs its model, so one in use has to be replaced first.
+    public async Task DeleteSpeechModelAsync(SpeechModelRow row)
+    {
+        if (row.Model == chosenSpeechModel || row.Model == paths.LoadConfig().SelectedSpeechModel)
+        {
+            Error = $"{row.Name} is selected. Choose another model and press Save first.";
+            return;
+        }
+        Error = await speechModels.DeleteAsync(row);
+    }
+
+    internal AppConfig Updated() => original with
+    {
+        SpeechModelId = chosenSpeechModel?.Id ?? original.SpeechModelId,
+        ModelPath = chosenSpeechModel is null ? original.ModelPath : null,
+        MicrophoneId = microphone?.Id,
+        PlaybackId = playback?.Id,
+        MaxSessionMinutes = maxMinutes,
+        OutputDirectory = outputDirectory,
+        SummaryModelPath = summaryModelPath,
+        SummarizeAutomatically = summarizeAutomatically,
+        SummaryProcessor = summarizeOnGpu ? SummaryProcessor.Gpu : SummaryProcessor.Cpu,
+        HideWindowFromScreenSharing = hideFromScreenSharing
+    };
+
     public bool TrySave()
     {
-        var updated = original with
+        if (chosenSpeechModel is null && original.NeedsSpeechModelSelection)
         {
-            MicrophoneId = microphone?.Id,
-            PlaybackId = playback?.Id,
-            MaxSessionMinutes = maxMinutes,
-            OutputDirectory = outputDirectory,
-            SummaryModelPath = summaryModelPath,
-            SummarizeAutomatically = summarizeAutomatically,
-            SummaryProcessor = summarizeOnGpu ? SummaryProcessor.Gpu : SummaryProcessor.Cpu,
-            HideWindowFromScreenSharing = hideFromScreenSharing
-        };
+            Error = "Choose a transcription model before saving. Download one first, or select the included Whisper base.en for offline use.";
+            return false;
+        }
+        var updated = Updated();
         try
         {
             updated.Validate();

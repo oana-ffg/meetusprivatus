@@ -8,9 +8,11 @@
     <Deterministic>true</Deterministic>
     <PathMap>$(MSBuildThisFileDirectory)=/_/</PathMap>
     <!-- Scripts read the release version from here. -->
-    <Version>0.2.0-preview.1</Version>
+    <Version>0.2.0-preview.2</Version>
     <WhisperVersion>1.9.1</WhisperVersion>
     <LLamaSharpVersion>0.30.0</LLamaSharpVersion>
+    <!-- Held at 1.28: later official builds add a telemetry uploader that would make network calls from the recording process. -->
+    <OnnxRuntimeVersion>1.28.0</OnnxRuntimeVersion>
     <VelopackVersion>1.2.161</VelopackVersion>
     <!-- AssemblyInfo declares Windows 11; the generic Windows TFM otherwise advertises Windows 7. -->
     <GenerateSupportedOSPlatformAttribute>false</GenerateSupportedOSPlatformAttribute>

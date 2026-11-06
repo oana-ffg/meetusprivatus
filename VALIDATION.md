@@ -1,4 +1,47 @@
-# Prototype validation — 2026-11-03
+# Prototype validation — 2026-11-06
+
+## Explicit transcription model setup — 2026-11-06
+
+No transcription model is selected automatically. Fresh settings and earlier preview settings without a model ID show a persistent setup guide and cannot start recording, including through direct command invocation or legacy Whisper paths. Settings opens at the model choices; cancellation keeps setup incomplete. Known saved choices survive subsequent launches.
+
+Warnings-as-errors build and self-contained publication passed with 173 behavioral checks. The full native suite passed 177 checks with the baseline check intentionally skipped there; the separate baseline CPU process and GPU summary check each passed. Public playback and Parakeet/Whisper recognition used public fixtures; no microphone was opened. A new setup test initially mistook startup cleanup's brief worker lock for a recording; it now checks that no recording status was created. The earlier scroll assertion also assumed scrolling was needed when all settings fit on screen and was corrected to check that the choices are visible.
+
+Real Zoom/Teams, target-laptop, accent, and full-worker acceptance limits below remain open. This release remains a preview.
+
+The real portable updater passed an isolated two-version update against a local feed, preserving synthetic meetings and downloaded models. After restart it showed the model guide with recording disabled and all four radios unselected; selecting the included Whisper base.en and saving enabled recording. Closing and reopening preserved that selection without repeating setup. No microphone was opened. Two earlier attempts exposed test-selector issues (PowerShell 5.1's handling of a Unicode button name, and a text heading matched instead of the dialog); the corrected full script passed and closed both app launches.
+
+A final cross-harness review approved the explicit-selection implementation and repository guidance. Its low-severity wording finding was fixed: setup no longer says a legacy Whisper path is in use while recording is blocked, and the configuration comment now describes when that override applies. Behavioral coverage includes this case and the ability to stop an existing worker before a model has been chosen.
+
+## Selectable transcription models and meeting deletion
+
+Run on a development desktop with public recordings and invented meetings. No microphone was opened, and no recording was made with Parakeet, tiny.en, or small.en through a real worker.
+
+**Model comparison.** One thread, BelowNormal priority, a fresh process per model, through the real recognizer including speech detection. Word error rate ignores case and punctuation, and treats "Mr" and "mister" as the same word.
+
+| Model | LibriSpeech sample, joined to 20-second clips (454 s) | The same sample as short clips (481 s) | CMU ARCTIC ksp, Indian English, first 50 clips (162 s) | Speed, 20-second clips | Speed, short clips | Peak memory | Load |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Whisper tiny.en Q5_1 | 8.7% | 10.7% | 14.8% | 5.6× | 2.5× | 231 MB | 0.1 s |
+| Whisper base.en Q5_1 | 7.6% | 9.7% | 13.8% | 2.6× | 1.1× | 302 MB | 0.1 s |
+| Whisper small.en Q5_1 | 4.4% | 5.6% | 7.8% | 0.8× | 0.3× | 541 MB | 0.3 s |
+| Parakeet TDT 0.6 v3 int8 | 3.8% | 4.5% | 5.9% | 6.1× | 6.0× | 894–1,101 MB | 2.5–3.1 s |
+
+Parakeet at two threads reached 10.2× on the 20-second clips with the same error rate. At 30-second clips, the maximum, it ran at 5.5× and peaked at 975 MB. Whisper's cost barely depends on clip length, because it always processes a full window, so short clips make it look slower; 20-second clips are nearer to what the app produces. Other builds shared the machine during parts of these runs, so small speed differences mean little.
+
+These are readings of prepared text by one speaker or a few, not meetings. They say nothing about crosstalk, poor microphones, names, or Irish and Danish accents, and one Indian English speaker does not represent that accent. Parakeet produced no non-English text in any of these runs, but all of them were English recordings with clear speech.
+
+**Found by testing.** Parakeet's feature extractor raises an error below 257 samples. Speech detection hid this in the first version of the test, and in a recording it would have stopped capture. Clips under 100 ms now produce no text, and the native test calls the engine directly with fragments from 1 ms up.
+
+**ONNX Runtime and privacy.** Reading the runtime's privacy document showed that versions from 1.29 document a built-in telemetry uploader using WinHTTP. Version 1.28.0 is pinned: its library has no WinHTTP, WinINet, or Winsock import or reference, and a behavioral test keeps it that way. DisableTelemetryEvents runs before any session, which source reading says stops its Windows trace events. That was not observed directly, because capturing them needs elevation. 59 samples during a Parakeet run saw no TCP or UDP endpoints on the process, no network-capable modules loaded, and BelowNormal priority. The process that was sampled was a benchmark using the real recognizer, not a recording worker, and the full live workflow remains an open gate.
+
+**Automated.** Warnings-as-errors build and 163 behavioral tests passed. With native checks enabled, 167 passed, including Parakeet through the recognizer, real output-device playback to text, and the real summary model; the separate baseline CPU check and GPU summary check passed. scripts/test-updates.ps1 passed with ONNX Runtime in the package. The first native run failed at the playback capture check, whose guard refuses when another app plays audio; that check passed alone, and the full native run then passed. The cause of that one failure was not established.
+
+**The real published app, driven through Windows UI Automation with isolated state and invented meetings:** the app starts without an error; a Parakeet download shows progress in Settings and in the sidebar after Settings closes, and blocks a second download; Stop leaves "Partly downloaded" with the partial file kept; Resume continues from it, growing the partial file rather than starting again; deleting a partial download asks first and removes the folder; closing the app leaves no app or helper process. The real helper also downloaded tiny.en from its pinned URL with a matching hash, and refused an unknown model.
+
+**The same app, driven on screen by a separate agent through computer use:** right-clicking a meeting selects it and offers "Delete meeting…"; the confirmation names the date and time, not the title, and defaults to No; No keeps the meeting; Yes removes it and its folder; a meeting folder holding a file the app did not write loses only the app's files, keeps that file, and says so. In Settings, base.en shows as included with no Delete button; tiny.en and Parakeet downloaded through the buttons; a selected model refused deletion with its reason; after selecting base.en and saving, both were deleted, leaving base.en, Silero, and the summary model in place. That agent ran under a separate sandbox Windows account, and its launch first showed "Something went wrong (UnauthorizedAccessException)". The sandbox account had created the state folder's private audio directory, which by design only its creator can open, so the app running as the normal user could not clean it. The banner did not appear with state created by the normal user. It is a cross-account artifact of the test setup, not reproduced in normal use.
+
+**Independent code review** found, and this work fixed: checking which models are installed looked inside the models folder before refusing a link or network path; pressing Stop, or starting a recording, while a download was still checking for a recording did not stop the download from starting; and Resume could start on a model while it was being deleted. Each now has a regression test. A fourth finding is left open: two copies of the app with different state directories (`--state-dir`, a development option) but the same meeting folder do not see each other's recording, so one can delete, or summarize, the meeting the other is recording. Summaries already had this limit. Fixing it needs a lock inside each meeting folder, shared by recording, summarizing, and deleting.
+
+**Not checked:** a real recording with these models; real Zoom or Teams calls; low-powered-laptop speed and memory, which matter most for Parakeet's memory and small.en's speed; language detection going wrong on real meetings; Parakeet with the baseline CPU runtime on a processor without AVX; recording under memory pressure.
 
 ## Desktop app and local summaries — 2026-11-03
 

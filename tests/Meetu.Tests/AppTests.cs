@@ -163,8 +163,8 @@ public sealed class AppTests
         using var root = new TestDirectory();
         var paths = new StatePaths(Path.Combine(root.Path, "state"));
         var model = Path.Combine(root.Path, "model.bin"); File.WriteAllBytes(model, [0]);
-        JsonFiles.Write(paths.ConfigFile, new AppConfig { ModelPath = model, VadPath = model, MicrophoneId = "unplugged-microphone" });
-        var settings = new SettingsViewModel(paths);
+        JsonFiles.Write(paths.ConfigFile, new AppConfig { SpeechModelId = SpeechModels.IncludedWhisperId, ModelPath = model, VadPath = model, MicrophoneId = "unplugged-microphone" });
+        var settings = new SettingsViewModel(paths, new SpeechModelsViewModel(paths, root.Path, (_, _) => throw new InvalidOperationException(), () => { }, () => false, _ => { }));
         Assert.Equal("unplugged-microphone", settings.Microphone!.Id);
         settings.MaxMinutes = 0;
         Assert.False(settings.TrySave());

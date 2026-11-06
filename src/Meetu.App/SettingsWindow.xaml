@@ -1,9 +1,47 @@
 <Window x:Class="Meetu.App.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Settings" Width="560" SizeToContent="Height" ResizeMode="NoResize"
+        xmlns:vm="clr-namespace:Meetu.App.ViewModels"
+        Title="Settings" Width="620" SizeToContent="Height" ResizeMode="NoResize"
+        MaxHeight="{Binding Source={x:Static SystemParameters.WorkArea}, Path=Height}"
         Icon="Assets/app.ico" WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
-    <StackPanel Margin="24">
+    <Window.Resources>
+        <DataTemplate x:Key="SpeechModelRowTemplate" DataType="{x:Type vm:SpeechModelChoice}">
+            <Grid Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <RadioButton GroupName="SpeechModel" IsChecked="{Binding IsChosen}" IsEnabled="{Binding Row.IsInstalled}" MinWidth="0" VerticalAlignment="Top"
+                             AutomationProperties.Name="{Binding Row.Name}" />
+                <StackPanel Grid.Column="1" Margin="4,4,12,0">
+                    <TextBlock Text="{Binding Row.Name}" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding Row.Description}" Style="{StaticResource Caption}" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding Row.Status}" Style="{StaticResource Caption}" />
+                    <ProgressBar Height="4" Margin="0,4,0,0" Value="{Binding Row.DownloadPercent, Mode=OneWay}"
+                                 Visibility="{Binding Row.IsDownloading, Converter={StaticResource VisibleWhenTrue}}" />
+                    <TextBlock Text="{Binding Row.Message}" Foreground="{StaticResource RecordingBrush}" TextWrapping="Wrap" Margin="0,4,0,0"
+                               Visibility="{Binding Row.Message, Converter={StaticResource VisibleWhenPresent}}" />
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Top" Margin="0,4,0,0">
+                    <Button Content="{Binding Row.DownloadLabel}" Command="{Binding Row.DownloadCommand}"
+                            Visibility="{Binding Row.ShowDownload, Converter={StaticResource VisibleWhenTrue}}" />
+                    <Button Content="Stop" Command="{Binding Row.StopCommand}"
+                            Visibility="{Binding Row.IsDownloading, Converter={StaticResource VisibleWhenTrue}}" />
+                    <Button Content="Delete" Click="DeleteSpeechModel" Margin="6,0,0,0"
+                            Visibility="{Binding Row.ShowDelete, Converter={StaticResource VisibleWhenTrue}}" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <ScrollViewer x:Name="SettingsScroller" VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="0,0,8,0">
         <TextBlock Text="Recording" Style="{StaticResource SectionHeading}" />
         <TextBlock Text="Microphone" Style="{StaticResource Caption}" Margin="0,0,0,4" />
         <ComboBox ItemsSource="{Binding Microphones}" SelectedItem="{Binding Microphone}" DisplayMemberPath="Name" Margin="0,0,0,12" />
@@ -20,6 +58,16 @@
             <TextBlock Text="{Binding OutputDirectoryText}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" ToolTip="{Binding OutputDirectoryText}" />
             <Button Grid.Column="1" Content="Change…" Click="ChooseFolder" Margin="8,0,0,0" />
         </Grid>
+
+        <TextBlock x:Name="TranscriptionHeading" Text="Transcription" Style="{StaticResource SectionHeading}" />
+        <TextBlock Text="Choose a model to get started. Nothing is selected automatically. Select Whisper base.en to work offline, or download another model, then select it and press Save."
+                   Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,12"
+                   Visibility="{Binding IsSpeechModelSetup, Converter={StaticResource VisibleWhenTrue}}" />
+        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,12"
+                   Text="Select the model for future recordings. Download or delete models here at any time when not recording; the choice applies when you press Save. A slower model can make text arrive later on a slower PC." />
+        <TextBlock Text="{Binding CustomSpeechModelNote}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,12"
+                   Visibility="{Binding CustomSpeechModelNote, Converter={StaticResource VisibleWhenPresent}}" />
+        <ItemsControl ItemsSource="{Binding SpeechModelChoices}" ItemTemplate="{StaticResource SpeechModelRowTemplate}" Margin="0,0,0,8" />
 
         <TextBlock Text="Summary" Style="{StaticResource SectionHeading}" />
         <CheckBox Content="Summarize automatically after each recording" IsChecked="{Binding SummarizeAutomatically}" Margin="0,0,0,12" />
@@ -41,7 +89,10 @@
                   Content="Hide this window from screen sharing and screenshots" />
         <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,20"
                    Text="Live text can include notes you spoke while muted. With this on, sharing your whole screen shows nothing where this window is." />
+        </StackPanel>
+        </ScrollViewer>
 
+        <StackPanel Grid.Row="1" Margin="0,12,0,0">
         <TextBlock Text="{Binding Error}" Foreground="{StaticResource RecordingBrush}" TextWrapping="Wrap" Margin="0,0,0,12"
                    Visibility="{Binding Error, Converter={StaticResource VisibleWhenPresent}}" />
         <TextBlock Text="Changes apply to the next recording." Style="{StaticResource Caption}" Margin="0,0,0,12" />
@@ -49,5 +100,6 @@
             <Button Content="Cancel" IsCancel="True" Margin="0,0,8,0" MinWidth="88" />
             <Button Content="Save" IsDefault="True" Click="Save" MinWidth="88" Style="{StaticResource AccentButtonStyle}" />
         </StackPanel>
-    </StackPanel>
+        </StackPanel>
+    </Grid>
 </Window>

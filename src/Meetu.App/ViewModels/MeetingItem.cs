@@ -17,6 +17,7 @@ public sealed class MeetingItem(MeetingInfo info, DateTime today) : Observable
             Raise(nameof(Title));
             Raise(nameof(Subtitle));
             Raise(nameof(Badge));
+            Raise(nameof(CanDelete));
         }
     }
 
@@ -32,6 +33,13 @@ public sealed class MeetingItem(MeetingInfo info, DateTime today) : Observable
         MeetingLibrary.UnreadableState => "Unreadable",
         _ => null
     };
+
+    public bool CanDelete => info.State is not ("Capturing" or "Starting" or "Finishing");
+
+    // Message boxes are separate windows, which the screen-sharing exclusion does not cover. So this names
+    // the meeting by its time only: its title comes from the transcript and could give away what was said.
+    public string DeleteConfirmation =>
+        $"Permanently delete the meeting from {DisplayText.FullDate(info)} at {Subtitle}?\n\nIts transcript and summary are removed from this PC and do not go to the Recycle Bin. This cannot be undone.";
 
     public string DateGroup { get; } = DisplayText.DateGroup(info.StartedUtc.ToLocalTime().Date, today);
 }

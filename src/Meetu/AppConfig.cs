@@ -15,6 +15,10 @@ public enum SummaryProcessor { Cpu, Gpu }
 public static class AppPaths
 {
     public static string DurableRoot { get; } = ResolveDurableRoot(AppContext.BaseDirectory);
+    // Downloaded models, which updates must leave alone.
+    public static string ModelsDirectory => Path.Combine(DurableRoot, "models");
+    // Models that ship inside the release, replaced along with the program.
+    public static string IncludedModelsDirectory => Path.Combine(AppContext.BaseDirectory, "models");
 
     public static bool IsReplacedByUpdates(string path) => IsInside(path, AppContext.BaseDirectory, DurableRoot);
 
@@ -38,8 +42,12 @@ public static class AppPaths
 public sealed record AppConfig
 {
     public string? OutputDirectory { get; init; }
-    // Null selects the models folder beside the executable, so saved settings survive moving or upgrading the app.
+    // Missing in earlier previews: ask the user instead of silently choosing the former default.
+    public string? SpeechModelId { get; init; }
+    // A specific Whisper file set in config.json or by earlier previews. With a confirmed model ID it overrides
+    // the catalog assets until a model is chosen in Settings; earlier configs still require model setup.
     public string? ModelPath { get; init; }
+    // Null selects the models folder beside the executable, so saved settings survive moving or upgrading the app.
     public string? VadPath { get; init; }
     public string? MicrophoneId { get; init; }
     public string? PlaybackId { get; init; }
@@ -52,20 +60,25 @@ public sealed record AppConfig
     public bool SummarizeAutomatically { get; init; } = true;
     public bool HideWindowFromScreenSharing { get; init; } = true;
 
-    private const string DefaultModelFile = "ggml-base.en-q5_1.bin";
+    private const string LegacyDefaultModelFile = "ggml-base.en-q5_1.bin";
     private const string DefaultVadFile = "ggml-silero-v5.1.2.bin";
     public const string DefaultSummaryModelFile = "Qwen3.5-4B-Q4_K_M.gguf";
 
-    [JsonIgnore] public string ResolvedModelPath => ModelPath ?? Path.Combine(AppContext.BaseDirectory, "models", DefaultModelFile);
-    [JsonIgnore] public string ResolvedVadPath => VadPath ?? Path.Combine(AppContext.BaseDirectory, "models", DefaultVadFile);
-    [JsonIgnore] public string ResolvedSummaryModelPath => SummaryModelPath ?? Path.Combine(AppPaths.DurableRoot, "models", DefaultSummaryModelFile);
+    // Null when a specific Whisper file is set, or when the saved choice is one this version does not know.
+    [JsonIgnore] public SpeechModel? SelectedSpeechModel => ModelPath is null ? SpeechModels.Find(SpeechModelId) : null;
+    [JsonIgnore] public bool NeedsSpeechModelSelection => SpeechModels.Find(SpeechModelId) is null;
+    // A file for Whisper, a folder for Parakeet.
+    [JsonIgnore] public string ResolvedModelPath => ModelPath ?? SpeechModelFiles.Locate(SelectedSpeechModel
+        ?? throw new ArgumentException("Choose a transcription model in Settings before recording."), AppPaths.ModelsDirectory);
+    [JsonIgnore] public string ResolvedVadPath => VadPath ?? Path.Combine(AppPaths.IncludedModelsDirectory, DefaultVadFile);
+    [JsonIgnore] public string ResolvedSummaryModelPath => SummaryModelPath ?? Path.Combine(AppPaths.ModelsDirectory, DefaultSummaryModelFile);
     [JsonIgnore] public string ResolvedOutputDirectory => OutputDirectory ?? Path.Combine(AppPaths.DurableRoot, "transcripts");
 
     // Earlier versions saved the install folder's default models. When that copy is gone, follow the
     // app's own models folder instead of requiring a manual reset. Other model choices are kept as-is.
     public AppConfig WithMissingDefaultModelsUnpinned() => this with
     {
-        ModelPath = Unpinned(ModelPath, DefaultModelFile),
+        ModelPath = Unpinned(ModelPath, LegacyDefaultModelFile),
         VadPath = Unpinned(VadPath, DefaultVadFile)
     };
 
@@ -86,6 +99,8 @@ public sealed record AppConfig
 
     public void Validate()
     {
+        if (NeedsSpeechModelSelection)
+            throw new ArgumentException("Choose a transcription model in Settings before recording.");
         if (string.IsNullOrWhiteSpace(ResolvedOutputDirectory) || !Path.IsPathFullyQualified(ResolvedOutputDirectory))
             throw new ArgumentException("Choose an absolute folder for saved meetings in Settings.");
         LocalPath.Require(ResolvedOutputDirectory);
@@ -95,13 +110,25 @@ public sealed record AppConfig
         LocalPath.Require(ResolvedSummaryModelPath);
         if (HasStorageReplacedByUpdates)
             throw new ArgumentException("Saved meetings and the summary model cannot live in the app's \"current\" folder, because updates replace it. Choose another location.");
-        if (!File.Exists(ResolvedModelPath))
-            throw new ArgumentException("The speech model is missing from this installation. Extract the complete release again.");
+        RequireSpeechModel();
         if (!File.Exists(ResolvedVadPath))
             throw new ArgumentException("The speech detector is missing from this installation. Extract the complete release again.");
         if (Threads is < 1 or > 2) throw new ArgumentException("Recognition threads must be 1 or 2.");
         if (ClipSeconds is < 5 or > 30) throw new ArgumentException("Clip length must be 5 to 30 seconds.");
         if (MaxSessionMinutes is < 1 or > 1440) throw new ArgumentException("Maximum recording duration must be 1 to 1440 minutes.");
+    }
+
+    private void RequireSpeechModel()
+    {
+        if (SelectedSpeechModel is not { } model)
+        {
+            if (!File.Exists(ResolvedModelPath)) throw new ArgumentException("The speech model file set in the configuration is missing. Choose a transcription model in Settings.");
+            return;
+        }
+        if (SpeechModelFiles.GetState(model, AppPaths.ModelsDirectory) == SpeechModelState.Installed) return;
+        throw new ArgumentException(model.IsIncluded
+            ? "The speech model is missing from this installation. Extract the complete release again."
+            : $"{model.Name} is not fully downloaded. Download it in Settings, or choose another transcription model.");
     }
 }
 

@@ -14,7 +14,7 @@ public sealed class SessionTests
         var paths = new StatePaths(Path.Combine(directory.Path, "state"));
         var model = Path.Combine(directory.Path, "synthetic-model.bin"); File.WriteAllBytes(model, [0]);
         var config = new AppConfig { OutputDirectory = Path.Combine(directory.Path, "transcripts"),
-            ModelPath = model, VadPath = model, ClipSeconds = 5 };
+            SpeechModelId = SpeechModels.IncludedWhisperId, ModelPath = model, VadPath = model, ClipSeconds = 5 };
         var capture = new SyntheticCapture();
         var recognizer = new PausedRecognizer(); recognizer.Resume.TrySetResult();
         var session = new CaptureSession(config, paths, _ => capture, _ => recognizer);
@@ -52,7 +52,7 @@ public sealed class SessionTests
         var paths = new StatePaths(Path.Combine(directory.Path, "state"));
         var model = Path.Combine(directory.Path, "synthetic-model.bin"); File.WriteAllBytes(model, [0]);
         var config = new AppConfig { OutputDirectory = Path.Combine(directory.Path, "transcripts"),
-            ModelPath = model, VadPath = model, ClipSeconds = 5 };
+            SpeechModelId = SpeechModels.IncludedWhisperId, ModelPath = model, VadPath = model, ClipSeconds = 5 };
         var capture = new SyntheticCapture();
         var recognizer = new PausedRecognizer();
         var session = new CaptureSession(config, paths, _ => capture, _ => recognizer);
@@ -98,7 +98,7 @@ public sealed class SessionTests
         var paths = new StatePaths(Path.Combine(directory.Path, "state"));
         var model = Path.Combine(directory.Path, "synthetic-model.bin"); File.WriteAllBytes(model, [0]);
         var config = new AppConfig { OutputDirectory = Path.Combine(directory.Path, "transcripts"),
-            ModelPath = model, VadPath = model, ClipSeconds = 5 };
+            SpeechModelId = SpeechModels.IncludedWhisperId, ModelPath = model, VadPath = model, ClipSeconds = 5 };
         var capture = new SyntheticCapture();
         var recognizer = new PausedRecognizer();
         var session = new CaptureSession(config, paths, _ => capture, _ => recognizer);

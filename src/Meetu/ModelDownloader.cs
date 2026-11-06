@@ -15,16 +15,30 @@ public sealed class ModelDownloader(HttpClient http, Func<TimeSpan, Cancellation
         AppConfig.DefaultSummaryModelFile, 2_740_937_888, "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
         new Uri("https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf"));
 
+    public const string PartialSuffix = ".partial";
     private const int MaximumAttempts = 5;
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(3);
     private readonly Func<TimeSpan, CancellationToken, Task> delay = delay ?? Task.Delay;
+
+    // Several files that make up one model, reported as a single download. Finished files are verified, not fetched again.
+    public async Task DownloadAllAsync(IReadOnlyList<ModelAsset> assets, string destinationDirectory, Action<long, long> progress, CancellationToken cancellationToken)
+    {
+        var total = assets.Sum(asset => asset.Size);
+        var finished = 0L;
+        foreach (var asset in assets)
+        {
+            var before = finished;
+            await DownloadAsync(asset, destinationDirectory, (received, _) => progress(before + received, total), cancellationToken);
+            finished += asset.Size;
+        }
+    }
 
     public async Task DownloadAsync(ModelAsset asset, string destinationDirectory, Action<long, long> progress, CancellationToken cancellationToken)
     {
         LocalPath.Require(destinationDirectory);
         Directory.CreateDirectory(destinationDirectory);
         var target = Path.Combine(destinationDirectory, asset.FileName);
-        var partial = target + ".partial";
+        var partial = target + PartialSuffix;
         // A link at either name could lead anywhere, including a network share.
         LocalPath.Require(target);
         LocalPath.Require(partial);

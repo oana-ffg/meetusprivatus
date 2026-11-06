@@ -49,10 +49,17 @@ public partial class MainWindow : Window
 
     private void OpenSettings(object sender, RoutedEventArgs e)
     {
-        var settings = new SettingsWindow(new SettingsViewModel(viewModel.Paths)) { Owner = this };
+        var settings = new SettingsWindow(new SettingsViewModel(viewModel.Paths, viewModel.SpeechModels)) { Owner = this };
         if (settings.ShowDialog() != true) return;
         ApplyCapturePrivacy();
         viewModel.RefreshAfterSettingsChange();
+    }
+
+    private async void DeleteMeetingClicked(object sender, RoutedEventArgs e)
+    {
+        var meeting = (MeetingItem)((FrameworkElement)sender).DataContext;
+        var answer = MessageBox.Show(this, meeting.DeleteConfirmation, "Delete meeting", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (answer == MessageBoxResult.Yes) await viewModel.DeleteMeetingAsync(meeting);
     }
 
     private void TranscriptLoaded(object sender, RoutedEventArgs e)

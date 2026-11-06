@@ -29,6 +29,8 @@ public sealed class MainViewModel : Observable
     private DateTimeOffset activeStartedUtc;
     private int? activeMaxMinutes;
     private string? generatingDirectory;
+    private string? deletingDirectory;
+    private Task summaryRun = Task.CompletedTask;
     private bool polling;
     private bool startInProgress;
     private int secondsSinceIdlePoll = IdlePollEverySeconds;
@@ -42,7 +44,7 @@ public sealed class MainViewModel : Observable
     private string? microphoneName;
     private string? playbackName;
 
-    public MainViewModel(StatePaths paths, string? updateFeed = null, IReadOnlyList<string>? launchArguments = null)
+    public MainViewModel(StatePaths paths, string? updateFeed = null, IReadOnlyList<string>? launchArguments = null, string? modelsDirectory = null)
     {
         this.paths = paths;
         this.updateFeed = updateFeed;
@@ -54,16 +56,26 @@ public sealed class MainViewModel : Observable
         MeetingsView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(MeetingItem.DateGroup)));
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         timer.Tick += async (_, _) => await TickAsync();
-        ToggleRecordingCommand = new RelayCommand(() => _ = ToggleRecordingAsync(), () => phase is RecordingPhase.Idle or RecordingPhase.Recording);
+        NeedsSpeechModelSelection = paths.LoadConfig().NeedsSpeechModelSelection;
+        ToggleRecordingCommand = new RelayCommand(() => _ = ToggleRecordingAsync(), () => phase == RecordingPhase.Recording || phase == RecordingPhase.Idle && !NeedsSpeechModelSelection);
         DismissBannerCommand = new RelayCommand(() => Banner = null);
         UpdateCommand = new RelayCommand(() => RunSafely(OnUpdatePressedAsync()), () => !network.IsRunning);
+        SpeechModels = new SpeechModelsViewModel(paths, modelsDirectory ?? AppPaths.ModelsDirectory, RunSpeechModelDownloadAsync, network.Cancel, () => network.IsRunning, ShowError);
     }
+
+    private Task<HelperResult> RunSpeechModelDownloadAsync(SpeechModel model, Action<double> reportPercent) =>
+        network.RunAsync(["download-speech-model", "--state-dir", paths.Root, "--model", model.Id], line =>
+        {
+            if (HelperProcess.TryParseProgress(line, out var received, out var total) && total > 0)
+                System.Windows.Application.Current.Dispatcher.BeginInvoke(() => reportPercent(100.0 * received / total));
+        });
 
     public ObservableCollection<MeetingItem> Meetings { get; } = [];
     public ICollectionView MeetingsView { get; }
     public ICommand ToggleRecordingCommand { get; }
     public ICommand DismissBannerCommand { get; }
     public ICommand UpdateCommand { get; }
+    public SpeechModelsViewModel SpeechModels { get; }
 
     public bool ShowUpdates => updates.IsInstalled;
     public string VersionText => $"Version {updates.CurrentVersion}";
@@ -73,6 +85,8 @@ public sealed class MainViewModel : Observable
     public StatePaths Paths => paths;
     public bool IsRecording => phase == RecordingPhase.Recording;
     public bool IsStarting => phase == RecordingPhase.Starting;
+    public bool NeedsSpeechModelSelection { get; private set; }
+    public bool ShowSpeechModelSetup => NeedsSpeechModelSelection && phase == RecordingPhase.Idle;
     public string RecordLabel => phase switch
     {
         RecordingPhase.Starting => "Starting…",
@@ -158,6 +172,10 @@ public sealed class MainViewModel : Observable
 
     public void RefreshAfterSettingsChange()
     {
+        NeedsSpeechModelSelection = paths.LoadConfig().NeedsSpeechModelSelection;
+        Raise(nameof(NeedsSpeechModelSelection));
+        Raise(nameof(ShowSpeechModelSetup));
+        CommandManager.InvalidateRequerySuggested();
         RefreshDevices();
         RunSafely(RefreshMeetingsAsync());
     }
@@ -192,12 +210,20 @@ public sealed class MainViewModel : Observable
 
     private async Task StartRecordingAsync()
     {
+        // Recheck the saved choice even when a command is invoked directly or settings changed elsewhere.
+        if (paths.LoadConfig().NeedsSpeechModelSelection)
+        {
+            RefreshAfterSettingsChange();
+            ShowError("Choose a transcription model in Settings before recording.");
+            return;
+        }
         Banner = null;
         startInProgress = true;
         SetPhase(RecordingPhase.Starting);
         StatusLine = "Getting ready…";
         // A meeting's responsiveness comes first: an unfinished summary gives way and resumes afterwards.
         summaries.Cancel();
+        SpeechModels.PauseForRecording();
         try
         {
             var status = await Task.Run(async () =>
@@ -333,6 +359,7 @@ public sealed class MainViewModel : Observable
         Raise(nameof(IsStarting));
         Raise(nameof(RecordLabel));
         Raise(nameof(RecordGlyph));
+        Raise(nameof(ShowSpeechModelSetup));
         CommandManager.InvalidateRequerySuggested();
     }
 
@@ -373,10 +400,12 @@ public sealed class MainViewModel : Observable
     {
         if (generatingDirectory is not null || phase != RecordingPhase.Idle || !modelAvailable) return;
         var next = requestedSummaries.FirstOrDefault()
-            ?? MeetingLibrary.PendingAutomaticSummaries(Meetings.Select(meeting => meeting.Info)).FirstOrDefault()?.Directory;
+            ?? MeetingLibrary.PendingAutomaticSummaries(Meetings.Select(meeting => meeting.Info)).FirstOrDefault(meeting => meeting.Directory != deletingDirectory)?.Directory;
         if (next is null) return;
         generatingDirectory = next;
         RefreshDetail();
+        var finished = new TaskCompletionSource();
+        summaryRun = finished.Task;
         try
         {
             void Report(SummaryProgress update) =>
@@ -397,8 +426,52 @@ public sealed class MainViewModel : Observable
             requestedSummaries.Remove(next);
             ShowError($"The summary could not be started ({exception.GetType().Name}).");
         }
-        finally { generatingDirectory = null; }
+        finally
+        {
+            generatingDirectory = null;
+            finished.SetResult();
+        }
         RunSafely(RefreshMeetingsAsync());
+    }
+
+    // The user confirmed this first. A summary of the meeting stops rather than writing into a folder being removed.
+    public async Task DeleteMeetingAsync(MeetingItem meeting)
+    {
+        var directory = meeting.Directory;
+        if (await IsRecordingIntoAsync(directory))
+        {
+            ShowError("This meeting is still being recorded. Stop the recording before deleting it.");
+            return;
+        }
+        deletingDirectory = directory;
+        requestedSummaries.Remove(directory);
+        try
+        {
+            if (generatingDirectory == directory)
+            {
+                summaries.Cancel();
+                await summaryRun;
+            }
+            if (SelectedMeeting == meeting) SelectedMeeting = null;
+            if (!await Task.Run(() => MeetingDeletion.Delete(directory)))
+                ShowError($"The meeting was deleted, but its folder stays because it holds files the app did not write: {directory}");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            ShowError($"The meeting could not be fully deleted ({exception.GetType().Name}). It stays listed so you can try again. Close anything using its files first.");
+        }
+        finally { deletingDirectory = null; }
+        await RefreshMeetingsAsync();
+        PumpSummaries();
+    }
+
+    // Asks the recording itself, because a worker this window has not noticed yet still counts.
+    private async Task<bool> IsRecordingIntoAsync(string directory)
+    {
+        if (IsActive(directory)) return true;
+        var live = await Task.Run(() => ControlServer.RequestAsync(paths));
+        if (live is not null) return string.Equals(live.SessionDirectory, directory, StringComparison.OrdinalIgnoreCase);
+        return await Task.Run(() => RecordingControl.IsWorkerRunning(paths));
     }
 
     private void DownloadModel() => RunSafely(DownloadModelAsync());
