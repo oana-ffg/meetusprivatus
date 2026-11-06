@@ -62,6 +62,22 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.13"
         }
       },
+      "Microsoft.ML.OnnxRuntime": {
+        "type": "Transitive",
+        "resolved": "1.28.0",
+        "contentHash": "xpguSCrXBe5E1l1088S7UqnI36EHaTL6CJMHEhwfGBoSwyPH5Q/IkbkBBk/GwXWzsVyEXpQm42ZimSAQs0/zKA==",
+        "dependencies": {
+          "Microsoft.ML.OnnxRuntime.Managed": "1.28.0"
+        }
+      },
+      "Microsoft.ML.OnnxRuntime.Managed": {
+        "type": "Transitive",
+        "resolved": "1.28.0",
+        "contentHash": "4ecKjwASHhAZXczK/xm5KU6MdvoIGfMd23UAwDbM9vfcfgqZgNqvFWPZPT0Elc1wu5vXWs2Kij1ZBmHCcv1UlA==",
+        "dependencies": {
+          "System.Numerics.Tensors": "9.0.0"
+        }
+      },
       "NAudio.Core": {
         "type": "Transitive",
         "resolved": "3.1.0",
@@ -133,6 +149,7 @@
           "LLamaSharp": "[0.30.0, )",
           "LLamaSharp.Backend.Cpu": "[0.30.0, )",
           "LLamaSharp.Backend.Vulkan.Windows": "[0.30.0, )",
+          "Microsoft.ML.OnnxRuntime": "[1.28.0, )",
           "NAudio.Wasapi": "[3.1.0, )",
           "Velopack": "[1.2.161, )",
           "Whisper.net": "[1.9.1, )",
@@ -141,6 +158,15 @@
         }
       }
     },
-    "net10.0-windows7.0/win-x64": {}
+    "net10.0-windows7.0/win-x64": {
+      "Microsoft.ML.OnnxRuntime": {
+        "type": "Transitive",
+        "resolved": "1.28.0",
+        "contentHash": "xpguSCrXBe5E1l1088S7UqnI36EHaTL6CJMHEhwfGBoSwyPH5Q/IkbkBBk/GwXWzsVyEXpQm42ZimSAQs0/zKA==",
+        "dependencies": {
+          "Microsoft.ML.OnnxRuntime.Managed": "1.28.0"
+        }
+      }
+    }
   }
 }

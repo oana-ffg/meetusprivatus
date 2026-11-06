@@ -71,10 +71,44 @@ try {
     if ([IO.File]::ReadAllText($meeting) -ne 'synthetic preserved text') { throw 'The update changed a saved meeting.' }
     if ([IO.File]::ReadAllText($model) -ne 'synthetic preserved model') { throw 'The update changed the summary model.' }
     Step 'OK  saved meetings and the summary model survived'
+    Wait-For 'the update asks for a transcription model' { (Get-Texts $window) -contains 'Choose a transcription model' } | Out-Null
+    $record = $window.FindFirst([Windows.Automation.TreeScope]::Descendants,
+        (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty, 'Start recording')))
+    if (-not $record -or $record.Current.IsEnabled) { throw 'Recording must stay disabled until a model is chosen.' }
+    Press $window ('Choose model' + [char]0x2026)
+    $settings = Wait-For 'model setup opens' {
+        $condition = New-Object Windows.Automation.AndCondition(
+            (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Window)),
+            (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty, 'Choose a transcription model')))
+        $window.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
+    }
+    $radios = @($settings.FindAll([Windows.Automation.TreeScope]::Descendants,
+        (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::RadioButton))))
+    if ($radios.Count -ne 4) { throw "Expected all four transcription model choices; found $($radios.Count)." }
+    foreach ($radio in $radios) {
+        if ($radio.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected) {
+            throw 'A transcription model was selected automatically.'
+        }
+    }
+    $base = $radios | Where-Object { $_.Current.Name -eq 'Whisper base.en' }
+    $base.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Press $settings 'Save'
+    Wait-For 'the chosen model is saved and recording is enabled' {
+        $saved = Get-Content -LiteralPath (Join-Path $state 'config.json') -Raw | ConvertFrom-Json
+        $saved.SpeechModelId -eq 'whisper-base.en' -and $record.Current.IsEnabled -and
+            ((Get-Texts $window) -notcontains 'Choose a transcription model')
+    } | Out-Null
     Press $window 'Check for updates'
     Wait-For 'the new version reports it is current' { (Get-Texts $window) -contains 'You have the latest version.' } | Out-Null
     $window.GetCurrentPattern([Windows.Automation.WindowPattern]::Pattern).Close()
     Wait-For 'the app closes' { -not (Get-AppWindow) } 15 | Out-Null
+    $null = Start-Process -FilePath $launcher -ArgumentList $arguments -PassThru
+    $window = Wait-For 'the saved model choice survives a restart' {
+        $w = Get-AppWindow
+        if ($w -and ((Get-Texts $w) -contains 'Version 0.0.2') -and ((Get-Texts $w) -notcontains 'Choose a transcription model')) { $w }
+    }
+    $window.GetCurrentPattern([Windows.Automation.WindowPattern]::Pattern).Close()
+    Wait-For 'the restarted app closes' { -not (Get-AppWindow) } 15 | Out-Null
     Write-Output 'Updater checks passed.'
 } finally {
     Get-Process MeetusPrivatus, meetus -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$install*" } | Stop-Process -Force

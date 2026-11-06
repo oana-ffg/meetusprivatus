@@ -6,9 +6,9 @@ namespace Meetu;
 public sealed record TranscriptLine(double StartSeconds, double EndSeconds, AudioSource Source, string Text, bool IsGap);
 
 public sealed record MeetingInfo(string Directory, DateTimeOffset StartedUtc, DateTimeOffset? EndedUtc, double? CaptureSeconds,
-    string State, string? Error, bool AutoSummarize, MeetingSummary? Summary);
+    string State, string? Error, bool AutoSummarize, MeetingSummary? Summary, string? SpeechModel = null);
 
-// Read-only view over session directories. Nothing here touches audio or changes what a worker wrote.
+// Read-only view over session directories. Nothing here touches audio or changes what a worker wrote; see MeetingDeletion.
 public static partial class MeetingLibrary
 {
     public const string InterruptedState = "Interrupted";
@@ -16,6 +16,8 @@ public static partial class MeetingLibrary
 
     [GeneratedRegex(@"^\d{8}-\d{6}-[0-9a-f]{32}$")]
     private static partial Regex SessionDirectoryName();
+
+    internal static bool HasSessionDirectoryName(string directory) => SessionDirectoryName().IsMatch(Path.GetFileName(directory));
 
     public static bool IsSessionDirectory(string directory) =>
         File.Exists(Path.Combine(directory, SessionMetadata.FileName)) && Directory.Exists(Path.Combine(directory, "segments"));
@@ -48,7 +50,7 @@ public static partial class MeetingLibrary
             var metadata = SessionMetadata.Read(directory.FullName);
             var final = metadata.State is "Complete" or "Failed";
             return new MeetingInfo(directory.FullName, metadata.StartedUtc, metadata.EndedUtc, metadata.CaptureSeconds,
-                final || active ? metadata.State : InterruptedState, metadata.Error, metadata.AutoSummarize, SummaryFiles.Read(directory.FullName));
+                final || active ? metadata.State : InterruptedState, metadata.Error, metadata.AutoSummarize, SummaryFiles.Read(directory.FullName), metadata.SpeechModel);
         }
         catch (Exception exception) when (exception is JsonException or IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
         {

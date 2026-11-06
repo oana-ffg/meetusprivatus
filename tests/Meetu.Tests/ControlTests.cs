@@ -99,7 +99,7 @@ public sealed class ControlTests(ITestOutputHelper output)
         var paths = new StatePaths(Path.Combine(directory.Path, "state"));
         // Force validation to fail before any models, capture or worker process can open.
         var missingModel = Path.Combine(directory.Path, "missing-synthetic-model.bin");
-        JsonFiles.Write(paths.ConfigFile, new AppConfig { ModelPath = missingModel, VadPath = missingModel });
+        JsonFiles.Write(paths.ConfigFile, new AppConfig { SpeechModelId = SpeechModels.IncludedWhisperId, ModelPath = missingModel, VadPath = missingModel });
         var elapsed = Stopwatch.StartNew();
         await Assert.ThrowsAsync<ArgumentException>(() => RecordingControl.PrepareStartAsync(paths));
         elapsed.Stop();
@@ -161,14 +161,14 @@ public sealed class ControlTests(ITestOutputHelper output)
         using var directory = new TestDirectory();
         var paths = new StatePaths(Path.Combine(directory.Path, "state"));
         var model = Path.Combine(directory.Path, "invalid-model-fixture.bin"); File.WriteAllBytes(model, [0]);
-        JsonFiles.Write(paths.ConfigFile, new AppConfig { ModelPath = model, VadPath = model, MicrophoneId = "configured-input" });
+        JsonFiles.Write(paths.ConfigFile, new AppConfig { SpeechModelId = SpeechModels.IncludedWhisperId, ModelPath = model, VadPath = model, MicrophoneId = "configured-input" });
         await RecordingControl.PrepareStartAsync(paths);
         var saved = paths.LoadConfig();
         Assert.Null(saved.OutputDirectory);
         Assert.Equal(Path.Combine(AppPaths.DurableRoot, "transcripts"), saved.ResolvedOutputDirectory);
         Assert.Equal("configured-input", saved.MicrophoneId);
         // Unset model paths stay unset in saved settings, so a moved or upgraded app finds its own models.
-        var defaults = new AppConfig();
+        var defaults = new AppConfig { SpeechModelId = SpeechModels.IncludedWhisperId };
         Assert.Equal(Path.Combine(AppContext.BaseDirectory, "models", "ggml-base.en-q5_1.bin"), defaults.ResolvedModelPath);
         Assert.Equal(Path.Combine(AppContext.BaseDirectory, "models", "ggml-silero-v5.1.2.bin"), defaults.ResolvedVadPath);
         var json = JsonSerializer.Serialize(defaults, JsonFiles.Options);
@@ -234,12 +234,12 @@ public sealed class ControlTests(ITestOutputHelper output)
         Directory.CreateDirectory(Path.GetDirectoryName(present)!); File.WriteAllBytes(present, [0]);
         var movedInstall = Path.Combine(directory.Path, "old-install", "models");
         var custom = Path.Combine(directory.Path, "missing", "ggml-base.en.bin");
-        var unpinned = new AppConfig { ModelPath = Path.Combine(movedInstall, "ggml-base.en-q5_1.bin"),
+        var unpinned = new AppConfig { SpeechModelId = SpeechModels.IncludedWhisperId, ModelPath = Path.Combine(movedInstall, "ggml-base.en-q5_1.bin"),
             VadPath = Path.Combine(movedInstall, "ggml-silero-v5.1.2.bin") }.WithMissingDefaultModelsUnpinned();
         Assert.Null(unpinned.ModelPath); Assert.Null(unpinned.VadPath);
-        Assert.Equal(present, new AppConfig { ModelPath = present }.WithMissingDefaultModelsUnpinned().ModelPath);
+        Assert.Equal(present, new AppConfig { SpeechModelId = SpeechModels.IncludedWhisperId, ModelPath = present }.WithMissingDefaultModelsUnpinned().ModelPath);
         // A different model the user chose is never silently replaced; validation reports it instead.
-        Assert.Equal(custom, new AppConfig { ModelPath = custom }.WithMissingDefaultModelsUnpinned().ModelPath);
+        Assert.Equal(custom, new AppConfig { SpeechModelId = SpeechModels.IncludedWhisperId, ModelPath = custom }.WithMissingDefaultModelsUnpinned().ModelPath);
     }
 
     [Fact]

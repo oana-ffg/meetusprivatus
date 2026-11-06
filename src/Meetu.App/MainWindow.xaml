@@ -18,6 +18,10 @@
             <Setter Property="Margin" Value="0,0,0,12" />
         </Style>
 
+        <ContextMenu x:Key="MeetingMenu">
+            <MenuItem Header="Delete meeting…" Click="DeleteMeetingClicked" IsEnabled="{Binding CanDelete}" />
+        </ContextMenu>
+
         <DataTemplate x:Key="MeetingRow" DataType="{x:Type vm:MeetingItem}">
             <Grid Margin="2,3">
                 <Grid.ColumnDefinitions>
@@ -150,8 +154,19 @@
                     </StackPanel>
                 </Button>
 
-                <TextBlock Grid.Row="2" Text="{Binding StatusLine}" Style="{StaticResource Caption}" Margin="2,8,2,8"
-                           TextWrapping="Wrap" Visibility="{Binding StatusLine, Converter={StaticResource VisibleWhenPresent}}" />
+                <StackPanel Grid.Row="2">
+                    <StackPanel x:Name="SpeechModelSetup" Margin="2,12,2,8"
+                                Visibility="{Binding ShowSpeechModelSetup, Converter={StaticResource VisibleWhenTrue}}">
+                        <TextBlock Text="Choose a transcription model" FontWeight="SemiBold" TextWrapping="Wrap" />
+                        <TextBlock Text="Before recording, choose a model and press Save. Whisper base.en is included for offline use; other models are available to download."
+                                   Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,4,0,8" />
+                        <Button Content="Choose model…" Click="OpenSettings" HorizontalAlignment="Left" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding StatusLine}" Style="{StaticResource Caption}" Margin="2,8,2,8"
+                               TextWrapping="Wrap" Visibility="{Binding StatusLine, Converter={StaticResource VisibleWhenPresent}}" />
+                    <TextBlock Text="{Binding SpeechModels.ActiveDownloadText}" Style="{StaticResource Caption}" Margin="2,8,2,0"
+                               TextWrapping="Wrap" Visibility="{Binding SpeechModels.ActiveDownloadText, Converter={StaticResource VisibleWhenPresent}}" />
+                </StackPanel>
 
                 <Grid Grid.Row="3" Margin="0,8,0,0">
                     <ListBox x:Name="MeetingList" ItemsSource="{Binding MeetingsView}" SelectedItem="{Binding SelectedMeeting}"
@@ -159,6 +174,13 @@
                              HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              VirtualizingPanel.IsVirtualizingWhenGrouping="True" VirtualizingPanel.ScrollUnit="Pixel"
                              AutomationProperties.Name="Meetings">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                <Setter Property="ContextMenu" Value="{StaticResource MeetingMenu}" />
+                                <!-- Otherwise screen readers announce each meeting by its type name. -->
+                                <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
                         <ListBox.GroupStyle>
                             <GroupStyle>
                                 <GroupStyle.HeaderTemplate>

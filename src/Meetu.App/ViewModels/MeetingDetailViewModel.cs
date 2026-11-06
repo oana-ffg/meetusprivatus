@@ -74,7 +74,7 @@ public sealed class MeetingDetailViewModel : Observable
 
     public string Directory => info.Directory;
     public string Title => DisplayText.Title(info);
-    public string Subtitle => $"{DisplayText.FullDate(info)} · {DisplayText.StartAndDuration(info)}";
+    public string Subtitle => $"{DisplayText.FullDate(info)} · {DisplayText.StartAndDuration(info)}{(info.SpeechModel is { } model ? $" · transcribed by {model}" : "")}";
     public bool IsLive => isLive;
     public string? Problem => isLive ? null : info.Error ?? (info.State == MeetingLibrary.InterruptedState
         ? "This recording ended unexpectedly. Text saved before that point is kept; some speech may be missing."

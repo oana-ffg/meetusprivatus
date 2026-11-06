@@ -19,6 +19,15 @@ public sealed class NativeFactAttribute : FactAttribute
     }
 }
 
+public sealed class ParakeetFactAttribute : FactAttribute
+{
+    public ParakeetFactAttribute()
+    {
+        if (Environment.GetEnvironmentVariable("MEETUS_NATIVE_TESTS") != "1" || Environment.GetEnvironmentVariable("MEETUS_PARAKEET_MODEL") is null)
+            Skip = "Download Parakeet into the models folder and run scripts/test-native.ps1 to run this check.";
+    }
+}
+
 public sealed class NativeRecognitionTests(ITestOutputHelper output)
 {
     [NativeFact]
@@ -108,15 +117,42 @@ public sealed class NativeRecognitionTests(ITestOutputHelper output)
     public async Task PublicSpeechAndSilenceUseTheLocalCpuPipeline()
     {
         using var directory = new TestDirectory();
-        var fixture = Environment.GetEnvironmentVariable("MEETUS_FIXTURE") ?? throw new InvalidOperationException("MEETUS_FIXTURE is required.");
         var config = Configuration(directory.Path);
         config.Validate();
         await using var recognizer = new Recognizer(config);
+        await ExerciseRecognizerAsync(recognizer, directory.Path);
+    }
+
+    [ParakeetFact]
+    public async Task ParakeetTranscribesThroughTheSamePipeline()
+    {
+        using var directory = new TestDirectory();
+        ParakeetSpeechEngine? engine = null;
+        await using var recognizer = new Recognizer(Configuration(directory.Path), _ => engine = new ParakeetSpeechEngine(Environment.GetEnvironmentVariable("MEETUS_PARAKEET_MODEL")!, 1));
+        Assert.Equal("1.28.0", Microsoft.ML.OnnxRuntime.OrtEnv.Instance().GetVersionString());
+        await ExerciseRecognizerAsync(recognizer, directory.Path);
+
+        // A stop can leave a fragment far shorter than a word. Speech detection usually catches these, but one that gets
+        // through reaches the model directly, and a failure here would end the whole recording.
+        using var wave = new WaveFileReader(Environment.GetEnvironmentVariable("MEETUS_FIXTURE")!);
+        var bytes = new byte[checked((int)wave.Length)];
+        wave.ReadExactly(bytes);
+        var audio = Recognizer.DecodePcm(bytes);
+        foreach (var milliseconds in new[] { 1, 10, 50, 100, 200, 400 })
+        {
+            var segments = await engine!.TranscribeAsync(audio[16000..(16000 + 16 * milliseconds)], CancellationToken.None);
+            output.WriteLine($"{milliseconds} ms fragment: {string.Join(' ', segments.Select(segment => segment.Text))}");
+        }
+    }
+
+    private async Task ExerciseRecognizerAsync(Recognizer recognizer, string workspace)
+    {
+        var fixture = Environment.GetEnvironmentVariable("MEETUS_FIXTURE") ?? throw new InvalidOperationException("MEETUS_FIXTURE is required.");
         using var wave = new WaveFileReader(fixture);
         Assert.Equal(16000, wave.WaveFormat.SampleRate); Assert.Equal(1, wave.WaveFormat.Channels); Assert.Equal(16, wave.WaveFormat.BitsPerSample);
         var bytes = new byte[checked((int)wave.Length)];
         wave.ReadExactly(bytes);
-        var path = Path.Combine(directory.Path, "public.pcm"); await File.WriteAllBytesAsync(path, bytes);
+        var path = Path.Combine(workspace, "public.pcm"); await File.WriteAllBytesAsync(path, bytes);
         var clock = Stopwatch.StartNew();
         var clip = new AudioClip(Guid.NewGuid().ToString("N"), AudioSource.Remote, path, 45, bytes.Length / 2, Stopwatch.GetTimestamp());
         var record = await recognizer.TranscribeAsync(clip, CancellationToken.None);
@@ -143,7 +179,7 @@ public sealed class NativeRecognitionTests(ITestOutputHelper output)
     internal static AppConfig Configuration(string outputDirectory)
     {
         var models = Environment.GetEnvironmentVariable("MEETUS_MODELS") ?? throw new InvalidOperationException("MEETUS_MODELS is required.");
-        return new AppConfig { OutputDirectory = outputDirectory, ModelPath = Path.Combine(models, "ggml-base.en-q5_1.bin"),
+        return new AppConfig { SpeechModelId = SpeechModels.IncludedWhisperId, OutputDirectory = outputDirectory, ModelPath = Path.Combine(models, "ggml-base.en-q5_1.bin"),
             VadPath = Path.Combine(models, "ggml-silero-v5.1.2.bin"), Threads = 1 };
     }
 }

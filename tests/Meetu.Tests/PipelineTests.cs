@@ -182,7 +182,7 @@ public sealed class PipelineTests
     {
         using var workspace = new TestDirectory();
         var model = System.IO.Path.Combine(workspace.Path, "model.bin"); File.WriteAllBytes(model, [0]);
-        var config = new AppConfig { OutputDirectory = workspace.Path, ModelPath = model, VadPath = model };
+        var config = new AppConfig { SpeechModelId = SpeechModels.IncludedWhisperId, OutputDirectory = workspace.Path, ModelPath = model, VadPath = model };
         config.Validate();
         Assert.Throws<ArgumentException>(() => (config with { Threads = 3 }).Validate());
         Assert.Throws<ArgumentException>(() => (config with { ClipSeconds = 31 }).Validate());

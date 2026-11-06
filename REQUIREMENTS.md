@@ -1,6 +1,6 @@
 # Meetus Privatus — Requirements
 
-Status: confirmed product requirements and implementation defaults, updated 2026-11-03. SPEC.md describes the prototype. Live acceptance and quantitative resource budgets remain unverified.
+Status: confirmed product requirements and implementation defaults, updated 2026-11-05. SPEC.md describes the prototype. Live acceptance and quantitative resource budgets remain unverified.
 
 ## Purpose
 
@@ -17,7 +17,8 @@ Produce useful text that jogs the user's memory about meeting discussions and in
 - Incremental transcription during meetings, displayed live inside the app. Delays are acceptable. Live text appears only in the app window; it stays out of status, diagnostics, and notifications.
 - Minimal effort for normal use: open the app, press Start, press Stop. No typed commands or app selection. Default local output works without configuration. Device and duration settings are available in the app.
 - At the end of a meeting, generate a summary with action items using a local LLM. The transcript remains the record; a summary is a fallible aid and is labelled as machine-generated.
-- View prior meetings: list, transcript, and summary.
+- View prior meetings: list, transcript, and summary. Right-clicking a meeting deletes it, after a confirmation.
+- Choose the transcription model in Settings: Whisper base.en is included; Whisper tiny.en, Whisper small.en, and Parakeet TDT 0.6 v3 can be downloaded and deleted there.
 - Manual startup is sufficient. Automatic meeting detection/start is an optional bonus. No Windows sign-in startup.
 - Default transcript output is the `transcripts` folder beside the program's launcher, which updates leave alone. The app updates itself when the user presses a button, without browser/GitHub setup on each update, preserving transcripts and settings.
 - Auto-stop capture after one hour by default, with configurable duration. Stop and timed stop must finish queued transcription before deleting its audio, subject to the existing pending-audio retention/failure policy.
@@ -28,7 +29,7 @@ Produce useful text that jogs the user's memory about meeting discussions and in
 - The running application makes **no external calls**, uploads, telemetry, cloud inference, automatic downloads/updates, or crash reporting.
 - Local models only, including for summaries. No cloud meeting integrations, bots, calendars, or automatic meeting joining.
 - Downloading a public model when the user asks is approved; offline import must work. Setup/build networking never authorizes disclosure of meeting content or application networking.
-- Checking for updates runs only when the user presses the button, in a separate helper process. It may fetch public release metadata and packages; it must never read or upload meeting content. The same applies to downloading a public summary model. No automatic invocation. Offline installation must remain possible.
+- Checking for updates runs only when the user presses the button, in a separate helper process. It may fetch public release metadata and packages; it must never read or upload meeting content. The same applies to downloading a public summary or transcription model. No automatic invocation. Offline installation must remain possible.
 - No durable audio recordings. Short temporary clips are allowed and must be deleted promptly after transcript commit.
 - Allow up to **one hour of pending audio**, bounded across both sources by age and bytes; never retain processed audio for the entire allowance unnecessarily.
 - Confirmed overload behavior: stop capture, preserve completed text, mark gaps, and delete audio before expiry. Do not silently extend retention or auto-restart.
@@ -43,7 +44,7 @@ The app does not control OS paging, dumps, memory, backups, user-selected synchr
 
 The implementation request authorizes ordinary choices needed to make the manual workflow usable:
 
-- Whisper **base.en**, default Q5_1, plus local Silero speech detection to skip nonspeech clips.
+- No transcription model is selected automatically. On first run, including after updating from a preview without model selection, guide the user to select and save a model before recording. Whisper **base.en**, Q5_1, is included for offline selection, plus local Silero speech detection to skip nonspeech clips whichever model transcribes.
 - One coordinated CPU worker, one inference thread initially, BelowNormal priority, configurable thread ceiling of two.
 - Default 20-second maximum clips, configurable 5–30 seconds; independent 16 kHz mono PCM streams share a 230,400,000-byte pending cap.
 - Output-device loopback, defaulting to the Windows default output at session start; an explicit output endpoint can be configured. Keep that endpoint for the session.
@@ -51,7 +52,7 @@ The implementation request authorizes ordinary choices needed to make the manual
 - Timestamped UTF-8 local.txt and remote.txt in unique session directories, with canonical text records for idempotent recovery.
 - Retain text until manual deletion. No automatic text purge or invented speaker identities. Meeting titles come from the local summary, derived from the transcript; without one, the start time is used.
 - Content-free inspectable errors, shown in the app, without notification pop-ups.
-- First run saves defaults; an unset transcript destination resolves beside the launcher without pinning its install location. The previous standard AppData destination migrates for future sessions; preserve old text and explicit custom destinations. Settings in the app configure future sessions. Recording duration accepts 1–1440 minutes; default 60.
+- First run asks for a transcription model; saving the choice saves the other defaults. An unset transcript destination resolves beside the launcher without pinning its install location. The previous standard AppData destination migrates for future sessions; preserve old text and explicit custom destinations. Settings in the app configure future sessions. Recording duration accepts 1–1440 minutes; default 60.
 
 These are implementation decisions, not separately answered product choices or measured accuracy/performance claims. Desired completion delay and CPU/memory/responsiveness budgets remain to be agreed from live measurements.
 

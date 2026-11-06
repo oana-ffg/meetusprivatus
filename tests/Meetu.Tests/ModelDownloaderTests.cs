@@ -57,6 +57,23 @@ public sealed class ModelDownloaderTests
     }
 
     [Fact]
+    public async Task SeveralFilesReportAsOneDownloadAndFinishedOnesAreNotFetchedAgain()
+    {
+        using var directory = new TestDirectory();
+        var second = new ModelAsset("second.bin", Content.Length, Asset.Sha256, new Uri("https://example.invalid/second.bin"));
+        File.WriteAllBytes(Path.Combine(directory.Path, Asset.FileName), Content);
+        var server = new ScriptedServer((_, _) => Whole(Content));
+        var reported = new List<(long Received, long Total)>();
+        await new ModelDownloader(new HttpClient(server), (_, _) => Task.CompletedTask).DownloadAllAsync([Asset, second], directory.Path,
+            (received, total) => reported.Add((received, total)), CancellationToken.None);
+        Assert.Single(server.Ranges);
+        Assert.Equal(Content, File.ReadAllBytes(Path.Combine(directory.Path, second.FileName)));
+        Assert.All(reported, report => Assert.Equal(Content.Length * 2L, report.Total));
+        Assert.Equal(Content.Length * 2L, reported[^1].Received);
+        Assert.Equal(reported.Select(report => report.Received).Order(), reported.Select(report => report.Received));
+    }
+
+    [Fact]
     public async Task ADroppedConnectionResumesWhereItStopped()
     {
         using var directory = new TestDirectory();

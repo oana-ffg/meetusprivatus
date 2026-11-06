@@ -3,7 +3,7 @@ using System.Diagnostics;
 namespace Meetu;
 
 // A helper the desktop app starts for work that belongs in its own process. It has no command-line interface:
-// recording stays independent of the window, summaries release their memory, and only the two network commands
+// recording stays independent of the window, summaries release their memory, and only the network commands
 // here ever touch the network, each when the user asks. The recording worker and the app itself stay offline.
 public static class Program
 {
@@ -16,7 +16,7 @@ public static class Program
         {
             if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
                 throw new PlatformNotSupportedException("Meetus Privatus requires Windows 11.");
-            if (args.Length == 0 || args[0] is not ("worker" or "summarize" or "check-update" or "download-model")) return UnknownCommandExitCode;
+            if (args.Length == 0 || args[0] is not ("worker" or "summarize" or "check-update" or "download-model" or "download-speech-model")) return UnknownCommandExitCode;
             var options = ParseOptions(args[1..]);
             var paths = new StatePaths(options.GetValueOrDefault("state-dir"));
             switch (args[0])
@@ -29,6 +29,8 @@ public static class Program
                         () => Environment.Exit(SummaryJob.InterruptedExitCode));
                 case "check-update":
                     return await CheckForUpdateAsync(options.GetValueOrDefault("update-feed"));
+                case "download-speech-model":
+                    return await DownloadSpeechModelAsync(options.GetValueOrDefault("model"));
                 default:
                     return await DownloadSummaryModelAsync();
             }
@@ -94,6 +96,15 @@ public static class Program
         var destination = Path.GetDirectoryName(new AppConfig().ResolvedSummaryModelPath)!;
         using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         await new ModelDownloader(http).DownloadAsync(ModelDownloader.SummaryModel, destination,
+            (received, total) => Report($"progress {received} {total}"), CancellationToken.None);
+        return 0;
+    }
+
+    private static async Task<int> DownloadSpeechModelAsync(string? id)
+    {
+        var model = SpeechModels.Find(id) ?? throw new ArgumentException("Unknown transcription model.");
+        using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        await new ModelDownloader(http).DownloadAllAsync(model.Downloads, SpeechModelFiles.DownloadDirectory(model, AppPaths.ModelsDirectory),
             (received, total) => Report($"progress {received} {total}"), CancellationToken.None);
         return 0;
     }
